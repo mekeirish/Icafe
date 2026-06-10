@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Cafétéria iCafe - Cyber Modern</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    <style>
+        button, .btn-like { touch-action: manipulation; }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: #0f172a; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb { background: #06b6d4; border-radius: 10px; }
+        .edit-mode { outline: 2px solid #06b6d4; outline-offset: 2px; border-radius: 1rem; }
+        .editable { position: relative; cursor: pointer; }
+        .editable::after { 
+            content: "✎"; 
+            position: absolute; 
+            top: 2px; 
+            right: 4px; 
+            font-size: 10px; 
+            background: rgba(6, 182, 212, 0.2);
+            backdrop-filter: blur(4px);
+            color: #06b6d4; 
+            border-radius: 10px; 
+            padding: 0 4px; 
+            pointer-events: none; 
+            z-index: 20; 
+            border: 1px solid rgba(6, 182, 212, 0.3);
+        }
+        .cat-btn, .prod-btn {
+            transition: all 0.3s ease-in-out;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        .cat-btn { padding: 8px 4px; }
+        .prod-btn { padding: 8px 4px; aspect-ratio: 1 / 1; }
+        .cat-btn img, .prod-btn img {
+            width: 48px;
+            height: 48px;
+            object-fit: contain;
+            margin-bottom: 6px;
+        }
+        .cat-btn:hover, .prod-btn:hover {
+            border-color: #06b6d4;
+            box-shadow: 0 0 12px rgba(6, 182, 212, 0.2);
+        }
+        input, textarea { font-size: 16px; }
+    </style>
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#4b6cb7">
+<link rel="apple-touch-icon" href="icon.png"></head>
+<body class="bg-gray-950 text-white antialiased overflow-hidden">
+    <div id="root"></div>
+    <script>
+        (function() {
+            const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+            // Données statiques
+            const BASE_MENU = {
+                coffee: { label: 'Café', color: '#ea580c', items: [{n: 'Espresso', p: 150}, {n: 'قهوة', p: 200}, {n: 'Cappuccino', p: 350}, {n: 'Latte', p: 380}] },
+                tea: { label: 'Thé', color: '#7c3aed', items: [{n: 'Earl Grey', p: 250}, {n: 'Vert Sencha', p: 250}, {n: 'Menthe', p: 220}, {n: 'Chai', p: 300}] },
+                snack: { label: 'Snack', color: '#eab308', items: [{n: 'Croissant', p: 180}, {n: 'Pain Choco', p: 180}, {n: 'Cookie', p: 200}, {n: 'Muffin', p: 250}] },
+                cold: { label: 'Frais', color: '#16a34a', items: [{n: 'Jus Orange', p: 350}, {n: 'Eau Miné', p: 150}, {n: 'Ice Tea', p: 300}, {n: 'Soda', p: 250}] },
+                bakery: { label: 'Pain', color: '#db2777', items: [{n: 'Baguette', p: 120}, {n: 'Tradition', p: 140}, {n: 'Pain complet', p: 200}] }
+            };
+
+            const generateUUID = () => crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random();
+            const getTodayString = () => new Date().toDateString();
+            
+            const extractFlaticonImageUrl = (url) => {
+                const match = url.match(/(\d{6,7})/);
+                if (!match) return null;
+                const id = match[1];
+                return `https://cdn-icons-png.flaticon.com/512/${Math.floor(id / 1000)}/${id}.png`;
+            };
+
+            // Composant principal
+            const CafeteriaApp = () => {
+                // États principaux
+                const [transactions, setTransactions] = useState([]);
+                const [cart, setCart] = useState([]);
+                const [recipes, setRecipes] = useState([]);
+                const [activeCategory, setActiveCategory] = useState('coffee');
+                const [isEditingMode, setIsEditingMode] = useState(false);
+                const [isTablet, setIsTablet] = useState(window.innerWidth >= 768);
+                const [activeTab, setActiveTab] = useState('sell');
+                const [customMenu, setCustomMenu] = useState(() => {
+                    const saved = localStorage.getItem("cafeteria_custom_menu");
+                    return saved ? JSON.parse(saved) : JSON.parse(JSON.stringify(BASE_MENU));
+                });
+                
+                // État pour les sons
+                const [soundEnabled, setSoundEnabled] = useState(() => {
+                    const saved = localStorage.getItem("cafeteria_sound_enabled");
+                    return saved !== null ? saved === 'true' : true;
+                });
+                
+                // Audio
+                const audioCtx = useRef(null);
+                const cashSoundRef = useRef(null);
+                
+                // Sauvegarde de l'état des sons
+                useEffect(() => {
+                    localStorage.setItem("cafeteria_sound_enabled", soundEnabled);
+                }, [soundEnabled]);
+                
+                useEffect(() => {
+                    audioCtx.current = new (window.AudioContext || window.webkitAudioContext)();
+                    cashSoundRef.current = new Audio("https://orangefreesounds.com/wp-content/uploads/2026/01/Cash-register-cha-ching-sound-effect.mp3");
+                    cashSoundRef.current.preload = "auto";
+                    return () => {
+                        if (audioCtx.current) audioCtx.current.close();
+                        if (cashSoundRef.current) cashSoundRef.current.pause();
+                    };
+                }, []);
+                
+                const playClickSound = () => {
+                    if (!soundEnabled) return;
+                    if (!audioCtx.current) return;
+                    const osc = audioCtx.current.createOscillator();
+                    const gain = audioCtx.current.createGain();
+                    osc.connect(gain);
+                    gain.connect(audioCtx.current.destination);
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(600, audioCtx.current.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(400, audioCtx.current.currentTime + 0.1);
+                    gain.gain.setValueAtTime(0.1, audioCtx.current.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.current.currentTime + 0.1);
+                    osc.start();
+                    osc.stop(audioCtx.current.currentTime + 0.1);
+                };
+                
+                const playCashSound = () => {
+                    if (!soundEnabled) return;
+                    if (cashSoundRef.current) {
+                        cashSoundRef.current.currentTime = 0;
+                        cashSoundRef.current.play().catch(e => console.log("Audio bloqué", e));
+                    }
+                };
+                
+                // Modales
+                const [isModalOpen, setIsModalOpen] = useState(false);
+                const [showRecipesList, setShowRecipesList] = useState(false);
+                const [selectedRecipe, setSelectedRecipe] = useState(null);
+                const [showSyncPanel, setShowSyncPanel] = useState(false);
+                const [showImagePanel, setShowImagePanel] = useState(false);
+                const [imgbbApiKey, setImgbbApiKey] = useState('');
+                const [imgbbApiKeySaved, setImgbbApiKeySaved] = useState('');
+                const [uploadedImageUrl, setUploadedImageUrl] = useState('');
+                const [isUploading, setIsUploading] = useState(false);
+                const [uploadMessage, setUploadMessage] = useState('');
+                const fileInputRef = useRef(null);
+                const [importJsonText, setImportJsonText] = useState("");
+                const [exportJsonText, setExportJsonText] = useState("");
+                const [qrCodeUrl, setQrCodeUrl] = useState("");
+                const [editModal, setEditModal] = useState({ open: false, type: null, categoryKey: null, itemIndex: null });
+                const [tempEditName, setTempEditName] = useState('');
+                const [tempEditPrice, setTempEditPrice] = useState('');
+                const [tempEditImageUrl, setTempEditImageUrl] = useState('');
+                const [tempEditUrlImport, setTempEditUrlImport] = useState('');
+                const [editUploading, setEditUploading] = useState(false);
+                const [urlImportLoading, setUrlImportLoading] = useState(false);
+                const pressTimer = useRef(null);
+                const optionsPressTimer = useRef(null);
+                
+                // Sauvegarde menu
+                useEffect(() => { localStorage.setItem("cafeteria_custom_menu", JSON.stringify(customMenu)); }, [customMenu]);
+                
+                // Chargement localStorage
+                useEffect(() => {
+                    const savedTx = localStorage.getItem("cafeteria_transactions");
+                    if (savedTx) try { setTransactions(JSON.parse(savedTx)); } catch(e) {}
+                    const savedRec = localStorage.getItem("cafeteria_recipes");
+                    if (savedRec) try { setRecipes(JSON.parse(savedRec)); } catch(e) {}
+                    const savedKey = localStorage.getItem("imgbb_api_key");
+                    if (savedKey) { setImgbbApiKeySaved(savedKey); setImgbbApiKey(savedKey); }
+                }, []);
+                
+                useEffect(() => { localStorage.setItem("cafeteria_transactions", JSON.stringify(transactions)); }, [transactions]);
+                useEffect(() => { localStorage.setItem("cafeteria_recipes", JSON.stringify(recipes)); }, [recipes]);
+                useEffect(() => { localStorage.setItem("imgbb_api_key", imgbbApiKeySaved); }, [imgbbApiKeySaved]);
+                
+                useEffect(() => {
+                    const handleResize = () => setIsTablet(window.innerWidth >= 768);
+                    window.addEventListener("resize", handleResize);
+                    return () => window.removeEventListener("resize", handleResize);
+                }, []);
+                
+                // Upload images
+                const resizeImage = (file) => new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const canvas = document.createElement('canvas');
+                            let w = img.width, h = img.height;
+                            const maxSize = 120;
+                            if (w > h) { if (w > maxSize) { h = (h * maxSize) / w; w = maxSize; } }
+                            else { if (h > maxSize) { w = (w * maxSize) / h; h = maxSize; } }
+                            canvas.width = w; canvas.height = h;
+                            const ctx = canvas.getContext('2d');
+                            ctx.clearRect(0, 0, w, h);
+                            ctx.drawImage(img, 0, 0, w, h);
+                            resolve(canvas.toDataURL('image/png', 0.92));
+                        };
+                        img.onerror = reject;
+                        img.src = e.target.result;
+                    };
+                    reader.onerror = reject;
+                    reader.readAsDataURL(file);
+                });
+                
+                const uploadToImgBB = async (base64) => {
+                    if (!imgbbApiKeySaved) throw new Error("Clé API manquante");
+                    const fd = new FormData();
+                    fd.append("key", imgbbApiKeySaved);
+                    fd.append("image", base64.split(',')[1]);
+                    const res = await fetch("https://api.imgbb.com/1/upload", { method: "POST", body: fd });
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const data = await res.json();
+                    if (data.success) return data.data.url;
+                    throw new Error(data.error?.message || "Erreur ImgBB");
+                };
+                
+                const uploadFile = async (file) => {
+                    if (!imgbbApiKeySaved) { setUploadMessage("❌ Clé API manquante"); return null; }
+                    setIsUploading(true);
+                    try {
+                        const resized = await resizeImage(file);
+                        const url = await uploadToImgBB(resized);
+                        setUploadMessage("✅ Upload réussi !");
+                        return url;
+                    } catch(err) { setUploadMessage("❌ Erreur: "+err.message); return null; }
+                    finally { setIsUploading(false); }
+                };
+                
+                const importFromUrl = async (url) => {
+                    if (!url.trim()) return null;
+                    if (!imgbbApiKeySaved) { setUploadMessage("❌ Clé API manquante"); return null; }
+                    let imageUrl = url;
+                    if (url.includes('flaticon.com')) {
+                        const cdnUrl = extractFlaticonImageUrl(url);
+                        if (cdnUrl) imageUrl = cdnUrl;
+                        else { setUploadMessage("❌ Lien Flaticon invalide"); return null; }
+                    }
+                    setIsUploading(true);
+                    try {
+                        const response = await fetch(imageUrl, { mode: 'cors' });
+                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                        const blob = await response.blob();
+                        const file = new File([blob], "image_from_url", { type: blob.type || 'image/png' });
+                        const resized = await resizeImage(file);
+                        const uploadedUrl = await uploadToImgBB(resized);
+                        setUploadMessage("✅ Import réussi !");
+                        return uploadedUrl;
+                    } catch(err) { setUploadMessage("❌ Erreur: "+err.message); return null; }
+                    finally { setIsUploading(false); }
+                };
+                
+                // Métier
+                const handleAddToCart = (item) => { playClickSound(); setCart(prev => [...prev, item]); };
+                const handleUndoLastRecipe = () => {
+                    if (!recipes.length) return;
+                    playClickSound();
+                    const last = recipes[recipes.length-1];
+                    setRecipes(prev => prev.slice(0,-1));
+                    setCart(prev => [...prev, ...last.items]);
+                    setTransactions(prev => prev.filter(t => t.timestamp !== last.timestamp));
+                };
+                const handleClearCart = () => { if (cart.length) { playClickSound(); setCart([]); } };
+                const handleCash = () => {
+                    if (!cart.length) return;
+                    playCashSound();
+                    const recipe = { uuid: generateUUID(), timestamp: Date.now(), items: [...cart], total: cart.reduce((s,i)=>s+i.p,0) };
+                    setRecipes(prev => [...prev, recipe]);
+                    const newTx = cart.map(item => ({ uuid: generateUUID(), timestamp: recipe.timestamp, item }));
+                    setTransactions(prev => [...prev, ...newTx]);
+                    setCart([]);
+                };
+                const cartTotal = useMemo(() => cart.reduce((s,i)=>s+i.p,0), [cart]);
+                const hasRecipes = recipes.length > 0;
+                
+                const exportData = useCallback(() => {
+                    const str = JSON.stringify(transactions);
+                    if (isTablet) { setExportJsonText(str); setQrCodeUrl(""); }
+                    else { setQrCodeUrl(`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(str)}`); setExportJsonText(""); }
+                }, [transactions, isTablet]);
+                
+                const importAndMerge = useCallback(() => {
+                    if (!importJsonText.trim()) return;
+                    try {
+                        const imported = JSON.parse(importJsonText);
+                        if (!Array.isArray(imported)) throw new Error("Format invalide");
+                        const map = new Map(transactions.map(t=>[t.uuid,t]));
+                        imported.forEach(t=>{ if(t.uuid && !map.has(t.uuid)) map.set(t.uuid,t); });
+                        const merged = Array.from(map.values()).sort((a,b)=>(a.timestamp||0)-(b.timestamp||0));
+                        setTransactions(merged);
+                        setImportJsonText("");
+                        playClickSound();
+                        alert(`Fusion : ${merged.length} transactions`);
+                    } catch(e) { alert("Erreur: "+e.message); }
+                }, [transactions, importJsonText]);
+                
+                const getTodayRecipes = () => {
+                    const today = getTodayString();
+                    return recipes.filter(r => new Date(r.timestamp).toDateString() === today);
+                };
+                
+                const getTodaySalesByProduct = () => {
+                    const today = getTodayString();
+                    const todayTransactions = transactions.filter(t => new Date(t.timestamp).toDateString() === today);
+                    const salesMap = new Map();
+                    todayTransactions.forEach(t => {
+                        const key = t.item.n;
+                        if (salesMap.has(key)) {
+                            const existing = salesMap.get(key);
+                            existing.quantity++;
+                            existing.total += t.item.p;
+                        } else {
+                            salesMap.set(key, { name: t.item.n, price: t.item.p, quantity: 1, total: t.item.p });
+                        }
+                    });
+                    return Array.from(salesMap.values());
+                };
+                
+                // Gestion édition
+                const openEditModal = (type, catKey, idx=null) => {
+                    if (type === 'category') {
+                        const cat = customMenu[catKey];
+                        setTempEditName(cat.label);
+                        setTempEditImageUrl(cat.imageUrl || '');
+                        setTempEditPrice(0);
+                    } else {
+                        const item = customMenu[catKey].items[idx];
+                        setTempEditName(item.n);
+                        setTempEditPrice(item.p);
+                        setTempEditImageUrl(item.imageUrl || '');
+                    }
+                    setEditModal({ open: true, type, categoryKey: catKey, itemIndex: idx });
+                    setTempEditUrlImport('');
+                };
+                
+                const closeEditModal = () => {
+                    setEditModal({ open: false, type: null, categoryKey: null, itemIndex: null });
+                    setTempEditName('');
+                    setTempEditPrice(0);
+                    setTempEditImageUrl('');
+                    setTempEditUrlImport('');
+                    setEditUploading(false);
+                    setUrlImportLoading(false);
+                };
+                
+                const saveEdit = () => {
+                    setCustomMenu(prev => {
+                        const newMenu = JSON.parse(JSON.stringify(prev));
+                        if (editModal.type === 'category') {
+                            newMenu[editModal.categoryKey].label = tempEditName;
+                            if (tempEditImageUrl) newMenu[editModal.categoryKey].imageUrl = tempEditImageUrl;
+                            else delete newMenu[editModal.categoryKey].imageUrl;
+                        } else {
+                            const item = newMenu[editModal.categoryKey].items[editModal.itemIndex];
+                            item.n = tempEditName;
+                            item.p = tempEditPrice;
+                            if (tempEditImageUrl) item.imageUrl = tempEditImageUrl;
+                            else delete item.imageUrl;
+                        }
+                        return newMenu;
+                    });
+                    closeEditModal();
+                };
+                
+                const handleImportUrl = async () => {
+                    if (!tempEditUrlImport) return;
+                    setUrlImportLoading(true);
+                    const url = await importFromUrl(tempEditUrlImport);
+                    if (url) setTempEditImageUrl(url);
+                    setUrlImportLoading(false);
+                };
+                
+                const handleEditFileUpload = async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    setEditUploading(true);
+                    const url = await uploadFile(file);
+                    if (url) setTempEditImageUrl(url);
+                    setEditUploading(false);
+                    e.target.value = '';
+                };
+                
+                const handleGeneralFileUpload = async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    const url = await uploadFile(file);
+                    if (url) setUploadedImageUrl(url);
+                };
+                
+                const saveApiKey = () => {
+                    if (imgbbApiKey.trim()) { setImgbbApiKeySaved(imgbbApiKey.trim()); setUploadMessage("Clé sauvegardée"); }
+                    else { setUploadMessage("Clé vide"); setImgbbApiKeySaved(''); }
+                };
+                
+                // Long press
+                const handlePressStart = (type, catKey, idx=null) => (e) => {
+                    if (!isEditingMode) return;
+                    e.preventDefault();
+                    pressTimer.current = setTimeout(() => openEditModal(type, catKey, idx), 500);
+                };
+                const handlePressEnd = () => { if (pressTimer.current) clearTimeout(pressTimer.current); };
+                
+                const handleOptionsClick = (e) => { e.preventDefault(); e.stopPropagation(); setIsModalOpen(true); };
+                const handleOptionsLongPress = () => { setIsEditingMode(!isEditingMode); };
+                
+                // ========== COMPOSANTS DE RENDU ==========
+                
+                // Composant bouton catégorie
+                const CategoryButton = ({ menuKey, cat, isActive }) => {
+                    const baseColor = BASE_MENU[menuKey].color;
+                    const imageUrl = cat.imageUrl;
+                    const activeClass = isActive 
+                        ? "border-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.3)] bg-gray-800/80" 
+                        : "border-cyan-900/30 bg-gray-900/60 hover:border-cyan-500/50 hover:shadow-[0_0_6px_rgba(6,182,212,0.15)]";
+                    let className = `cat-btn rounded-lg font-bold text-xs transition-all duration-300 ${activeClass} backdrop-blur-sm`;
+                    if (!imageUrl) {
+                        className += isActive ? " text-white" : " text-gray-300";
+                    } else {
+                        className += " text-white";
+                    }
+                    if (isEditingMode) className += " editable";
+                    
+                    return React.createElement('button', {
+                        onClick: () => setActiveCategory(menuKey),
+                        onTouchStart: handlePressStart('category', menuKey),
+                        onTouchEnd: handlePressEnd,
+                        onMouseDown: handlePressStart('category', menuKey),
+                        onMouseUp: handlePressEnd,
+                        className: className,
+                        style: !imageUrl && isActive ? { backgroundColor: baseColor } : (!imageUrl ? { backgroundColor: '#1f2937' } : {})
+                    },
+                        imageUrl ? React.createElement('img', { src: imageUrl, alt: cat.label }) : null,
+                        !imageUrl && isActive ? React.createElement('div', { className: "w-6 h-0.5 rounded-full mb-1", style: { backgroundColor: baseColor } }) : null,
+                        React.createElement('span', {}, cat.label)
+                    );
+                };
+                
+                // Composant bouton produit
+                const ProductButton = ({ item, idx, catKey }) => {
+                    const imageUrl = item.imageUrl;
+                    let className = `prod-btn rounded-lg transition-all duration-300 text-center border border-cyan-900/30 bg-gray-900/60 hover:border-cyan-500/50 hover:shadow-[0_0_6px_rgba(6,182,212,0.15)] active:scale-95 backdrop-blur-sm`;
+                    if (!imageUrl) className += " text-gray-200";
+                    else className += " text-white";
+                    if (isEditingMode) className += " editable";
+                    
+                    return React.createElement('button', {
+                        key: idx,
+                        onClick: () => handleAddToCart(item),
+                        onTouchStart: handlePressStart('product', catKey, idx),
+                        onTouchEnd: handlePressEnd,
+                        onMouseDown: handlePressStart('product', catKey, idx),
+                        onMouseUp: handlePressEnd,
+                        className: className
+                    },
+                        imageUrl ? React.createElement('img', { src: imageUrl, alt: item.n }) : null,
+                        React.createElement('div', { className: "text-container" },
+                            React.createElement('span', { className: "font-bold text-[10px]" }, item.n),
+                            React.createElement('span', { className: "text-[8px] text-cyan-400 block" }, item.p, " DZD")
+                        )
+                    );
+                };
+                
+                // Vue Vendre (texte doublé dans commande en cours)
+                const SellView = () => React.createElement('div', { className: "flex flex-col h-full overflow-hidden p-2" },
+                    React.createElement('div', { className: "flex-shrink-0 mb-2 grid grid-cols-5 gap-1.5" },
+                        Object.keys(customMenu).map(key => 
+                            React.createElement(CategoryButton, { key: key, menuKey: key, cat: customMenu[key], isActive: activeCategory === key })
+                        )
+                    ),
+                    React.createElement('div', { className: "flex-shrink-0 mb-2 grid grid-cols-4 gap-1.5" },
+                        customMenu[activeCategory].items.map((item, idx) => 
+                            React.createElement(ProductButton, { key: idx, item: item, idx: idx, catKey: activeCategory })
+                        )
+                    ),
+                    React.createElement('div', { className: "flex-1 flex flex-col min-h-0" },
+                        React.createElement('div', { className: "bg-gray-900/40 backdrop-blur-sm rounded-lg border border-cyan-900/30 flex flex-col h-full overflow-hidden p-2" },
+                            React.createElement('h2', { className: "text-cyan-400 font-bold text-sm mb-2 flex items-center gap-1" }, React.createElement('span', { className: "text-lg" }, "🛒"), "Commande en cours"),
+                            React.createElement('div', { className: "flex-1 overflow-y-auto space-y-1 text-base min-h-[60px]" },
+                                cart.length === 0 ? React.createElement('p', { className: "text-gray-400 text-base" }, "Aucun produit") :
+                                cart.map((item, idx) => React.createElement('div', { key: idx, className: "flex justify-between border-b border-cyan-900/20 py-2" },
+                                    React.createElement('span', { className: "font-bold text-base" }, item.n),
+                                    React.createElement('span', { className: "font-mono text-cyan-300 text-base" }, item.p, " DZD")
+                                ))
+                            ),
+                            React.createElement('button', { onClick: handleClearCart, disabled: cart.length === 0, className: "w-full bg-red-950/60 border border-red-900/30 py-1 rounded-md text-sm font-bold " + (cart.length === 0 ? 'opacity-40' : 'hover:border-red-500/50 active:scale-95') }, "🗑️ Vider"),
+                            React.createElement('div', { className: "border-t border-cyan-900/30 mt-2 pt-2 flex justify-between items-center gap-2" },
+                                React.createElement('button', { onClick: handleUndoLastRecipe, disabled: !hasRecipes, className: "bg-gray-800/60 border border-cyan-900/30 w-10 h-10 rounded-md text-xl " + (!hasRecipes ? 'opacity-40' : 'hover:border-cyan-500/50 active:scale-95') }, "↩️"),
+                                React.createElement('span', { className: "font-bold text-lg flex-1 text-center text-cyan-300" }, "💰 ", cartTotal, " DZD"),
+                                React.createElement('button', { onClick: handleCash, disabled: cart.length === 0, className: "bg-green-950/60 border border-green-900/30 px-3 py-2 rounded-md text-sm font-bold " + (cart.length === 0 ? 'opacity-50' : 'hover:border-green-500/50 active:scale-95') }, "💵 Cash")
+                            )
+                        )
+                    )
+                );
+                
+                // Vue Journal
+                const JournalView = () => {
+                    const todaySales = getTodaySalesByProduct();
+                    const totalToday = todaySales.reduce((s, i) => s + i.total, 0);
+                    return React.createElement('div', { className: "flex-1 flex flex-col p-2 overflow-hidden" },
+                        React.createElement('div', { className: "bg-gray-900/40 backdrop-blur-sm rounded-lg border border-cyan-900/30 flex flex-col h-full overflow-hidden p-2" },
+                            React.createElement('h2', { className: "text-cyan-400 font-bold text-sm mb-2 flex items-center gap-1" }, React.createElement('span', { className: "text-sm" }, "📊"), "Ventes du jour"),
+                            React.createElement('div', { className: "flex-1 overflow-y-auto" },
+                                React.createElement('div', { className: "grid grid-cols-2 gap-2" },
+                                    todaySales.length === 0 ? React.createElement('div', { className: "col-span-2 text-center text-gray-400 text-xs py-4" }, "Aucune vente aujourd'hui") :
+                                    todaySales.map((sale, idx) => React.createElement('div', { key: idx, className: "bg-gray-800/40 rounded-lg border border-cyan-900/30 p-2" },
+                                        React.createElement('div', { className: "flex justify-between items-start mb-1" },
+                                            React.createElement('span', { className: "font-bold text-xs text-cyan-300" }, sale.name),
+                                            React.createElement('span', { className: "text-[10px] text-gray-400" }, sale.price, " DZD/unité")
+                                        ),
+                                        React.createElement('div', { className: "flex justify-between items-center mt-1" },
+                                            React.createElement('span', { className: "text-xs" }, "Quantité: ", React.createElement('span', { className: "font-bold text-cyan-400" }, sale.quantity)),
+                                            React.createElement('span', { className: "text-xs" }, "Total: ", React.createElement('span', { className: "font-bold text-green-400" }, sale.total, " DZD"))
+                                        )
+                                    ))
+                                )
+                            ),
+                            React.createElement('div', { className: "border-t border-cyan-900/30 mt-2 pt-2 flex justify-between font-bold text-sm" },
+                                React.createElement('span', {}, "💰 TOTAL DU JOUR"),
+                                React.createElement('span', { className: "text-cyan-400" }, totalToday, " DZD")
+                            )
+                        )
+                    );
+                };
+                
+                // Vue Synchro
+                const SyncView = () => React.createElement('div', { className: "flex-1 flex flex-col p-2 overflow-y-auto" },
+                    React.createElement('div', { className: "bg-gray-900/40 backdrop-blur-sm rounded-lg border border-cyan-900/30 p-2 space-y-2" },
+                        React.createElement('h2', { className: "text-indigo-400 font-bold text-sm flex items-center gap-1" }, React.createElement('span', { className: "text-sm" }, "🔄"), "Synchronisation"),
+                        React.createElement('button', { onClick: exportData, className: "w-full bg-gray-800/60 border border-cyan-900/30 py-1 rounded-md text-[11px] font-bold hover:border-cyan-500/50 active:scale-95" }, "📤 Exporter les transactions"),
+                        isTablet && exportJsonText && React.createElement('textarea', { readOnly: true, value: exportJsonText, className: "w-full h-20 bg-gray-900/80 text-cyan-300 text-[10px] p-1 rounded-md border border-cyan-900/30" }),
+                        !isTablet && qrCodeUrl && React.createElement('img', { src: qrCodeUrl, className: "mx-auto w-24 h-24 bg-white p-1 rounded-md" }),
+                        React.createElement('textarea', { value: importJsonText, onChange: e => setImportJsonText(e.target.value), className: "w-full h-16 bg-gray-900/80 text-white text-[10px] p-1 rounded-md border border-cyan-900/30", placeholder: "Collez le JSON" }),
+                        React.createElement('button', { onClick: importAndMerge, className: "w-full bg-cyan-950/60 border border-cyan-900/30 py-1 rounded-md text-[11px] font-bold hover:border-cyan-500/50 active:scale-95" }, "📥 Importer et fusionner"),
+                        React.createElement('hr', { className: "border-cyan-900/30" }),
+                        React.createElement('h3', { className: "font-bold text-cyan-400 text-xs" }, "🖼️ Gestion des images"),
+                        React.createElement('input', { type: "text", value: imgbbApiKey, onChange: e => setImgbbApiKey(e.target.value), className: "w-full bg-gray-900/80 p-1 rounded-md border border-cyan-900/30 text-[10px]", placeholder: "Clé API ImgBB" }),
+                        React.createElement('button', { onClick: saveApiKey, className: "bg-blue-950/60 border border-blue-900/30 px-2 py-0.5 rounded-md text-[10px] hover:border-blue-500/50 active:scale-95" }, "💾 Sauvegarder"),
+                        React.createElement('input', { type: "file", accept: "image/*", ref: fileInputRef, onChange: handleGeneralFileUpload, className: "text-[9px] mt-1" }),
+                        isUploading && React.createElement('p', { className: "text-yellow-400 text-[9px]" }, "Upload..."),
+                        uploadMessage && React.createElement('p', { className: "text-[9px] " + (uploadMessage.includes('✅') ? 'text-green-400' : 'text-red-400') }, uploadMessage),
+                        uploadedImageUrl && React.createElement('div', { className: "mt-1 p-1 bg-gray-800/60 rounded-md" },
+                            React.createElement('p', { className: "text-[8px] break-all" }, "URL: ", uploadedImageUrl),
+                            React.createElement('img', { src: uploadedImageUrl, className: "w-8 h-8 object-contain mt-0.5 rounded" }),
+                            React.createElement('button', { onClick: () => navigator.clipboard.writeText(uploadedImageUrl), className: "bg-gray-700/60 text-[9px] px-1 py-0.5 mt-0.5 rounded" }, "Copier")
+                        )
+                    )
+                );
+                
+                // Modale Options (avec bouton Sound)
+                const OptionsModal = () => {
+                    if (!isModalOpen) return null;
+                    return React.createElement('div', { className: "fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4", onClick: (e) => { if (e.target === e.currentTarget) setIsModalOpen(false); } },
+                        React.createElement('div', { className: "bg-gray-900/90 backdrop-blur-md rounded-xl border border-cyan-900/50 max-w-lg w-full max-h-[90vh] overflow-y-auto p-3" },
+                            React.createElement('div', { className: "flex justify-between items-center mb-3" },
+                                React.createElement('h2', { className: "text-lg font-bold text-cyan-400" }, "⚙️ Options"),
+                                React.createElement('button', { onClick: () => setIsModalOpen(false), className: "text-gray-400 text-xl hover:text-cyan-400" }, "✕")
+                            ),
+                            React.createElement('div', { className: "space-y-2" },
+                                React.createElement('button', { onClick: () => { setShowRecipesList(!showRecipesList); setShowSyncPanel(false); setShowImagePanel(false); }, className: "w-full bg-purple-950/60 border border-purple-900/30 py-2 rounded-lg text-sm" }, "📋 Recettes du jour"),
+                                React.createElement('button', { onClick: () => { setShowSyncPanel(!showSyncPanel); setShowRecipesList(false); setShowImagePanel(false); }, className: "w-full bg-cyan-950/60 border border-cyan-900/30 py-2 rounded-lg text-sm" }, "🔄 Synchronisation"),
+                                React.createElement('button', { onClick: () => { setShowImagePanel(!showImagePanel); setShowRecipesList(false); setShowSyncPanel(false); }, className: "w-full bg-pink-950/60 border border-pink-900/30 py-2 rounded-lg text-sm" }, "🖼️ Gestion images"),
+                                React.createElement('button', { onClick: () => { setIsEditingMode(!isEditingMode); setIsModalOpen(false); }, className: "w-full py-2 rounded-lg text-sm border " + (isEditingMode ? 'bg-red-950/60 border-red-500/50' : 'bg-red-950/30 border-red-900/30 hover:border-red-500/50') }, isEditingMode ? "✏️ Désactiver édition" : "✏️ Activer édition"),
+                                React.createElement('button', { onClick: () => { setSoundEnabled(!soundEnabled); }, className: "w-full py-2 rounded-lg text-sm border " + (soundEnabled ? 'bg-green-950/60 border-green-500/50' : 'bg-gray-950/60 border-gray-700/30') }, soundEnabled ? "🔊 Sons activés" : "🔇 Sons désactivés")
+                            ),
+                            showRecipesList && React.createElement('div', { className: "mt-2 border-t border-cyan-900/30 pt-2" },
+                                React.createElement('button', { onClick: () => setShowRecipesList(false), className: "text-cyan-400 text-xs" }, "← Retour"),
+                                React.createElement('h3', { className: "font-bold text-sm mt-1" }, "Recettes du jour"),
+                                getTodayRecipes().length === 0 ? React.createElement('p', { className: "text-gray-400 text-xs" }, "Aucune commande") : getTodayRecipes().map(r => React.createElement('button', { key: r.uuid, onClick: () => setSelectedRecipe(r), className: "w-full text-left bg-gray-800/60 border border-cyan-900/30 p-1 rounded-md mt-1 text-xs" }, new Date(r.timestamp).toLocaleTimeString(), " - ", r.total, " DZD"))
+                            ),
+                            showSyncPanel && React.createElement('div', { className: "mt-2 border-t border-cyan-900/30 pt-2" },
+                                React.createElement('button', { onClick: () => setShowSyncPanel(false), className: "text-cyan-400 text-xs" }, "← Retour"),
+                                React.createElement('h3', { className: "font-bold text-sm mb-1" }, "Synchronisation"),
+                                React.createElement('button', { onClick: exportData, className: "w-full bg-gray-800/60 border border-cyan-900/30 py-1 rounded-md text-xs" }, "📤 Exporter"),
+                                isTablet && exportJsonText && React.createElement('textarea', { readOnly: true, value: exportJsonText, className: "w-full h-20 bg-gray-900/80 text-cyan-300 text-[10px] p-1 rounded-md mt-1" }),
+                                !isTablet && qrCodeUrl && React.createElement('img', { src: qrCodeUrl, className: "mx-auto w-24 h-24 bg-white p-1 rounded-md mt-1" }),
+                                React.createElement('textarea', { value: importJsonText, onChange: e => setImportJsonText(e.target.value), className: "w-full h-16 bg-gray-900/80 text-white text-[10px] p-1 rounded-md mt-1", placeholder: "JSON" }),
+                                React.createElement('button', { onClick: importAndMerge, className: "w-full bg-cyan-950/60 border border-cyan-900/30 py-1 rounded-md text-xs mt-1" }, "📥 Importer")
+                            ),
+                            showImagePanel && React.createElement('div', { className: "mt-2 border-t border-cyan-900/30 pt-2" },
+                                React.createElement('button', { onClick: () => setShowImagePanel(false), className: "text-cyan-400 text-xs" }, "← Retour"),
+                                React.createElement('h3', { className: "font-bold text-sm mb-1" }, "Gestion images"),
+                                React.createElement('input', { type: "text", value: imgbbApiKey, onChange: e => setImgbbApiKey(e.target.value), className: "w-full bg-gray-900/80 p-1 rounded-md border border-cyan-900/30 text-xs", placeholder: "Clé API" }),
+                                React.createElement('button', { onClick: saveApiKey, className: "bg-blue-950/60 border border-blue-900/30 px-2 py-0.5 rounded-md text-xs mt-1" }, "💾 Sauvegarder"),
+                                React.createElement('input', { type: "file", accept: "image/*", ref: fileInputRef, onChange: handleGeneralFileUpload, className: "text-xs mt-1" }),
+                                isUploading && React.createElement('p', { className: "text-yellow-400 text-[10px]" }, "Upload..."),
+                                uploadMessage && React.createElement('p', { className: "text-[10px] " + (uploadMessage.includes('✅') ? 'text-green-400' : 'text-red-400') }, uploadMessage),
+                                uploadedImageUrl && React.createElement('div', { className: "mt-1 p-1 bg-gray-800/60 rounded-md" },
+                                    React.createElement('p', { className: "text-[9px] break-all" }, "URL: ", uploadedImageUrl),
+                                    React.createElement('img', { src: uploadedImageUrl, className: "w-8 h-8 object-contain mt-0.5 rounded" }),
+                                    React.createElement('button', { onClick: () => navigator.clipboard.writeText(uploadedImageUrl), className: "bg-gray-700/60 text-[9px] px-1 py-0.5 mt-0.5 rounded" }, "Copier")
+                                )
+                            ),
+                            selectedRecipe && React.createElement('div', { className: "fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4", onClick: () => setSelectedRecipe(null) },
+                                React.createElement('div', { className: "bg-gray-900/90 rounded-xl border border-cyan-900/50 p-3 max-w-sm", onClick: e => e.stopPropagation() },
+                                    React.createElement('h4', { className: "font-bold text-cyan-400 text-sm" }, "Détail commande"),
+                                    selectedRecipe.items.map((item, idx) => React.createElement('div', { key: idx, className: "flex justify-between border-b border-cyan-900/20 py-0.5 text-xs" }, React.createElement('span', {}, item.n), React.createElement('span', { className: "text-cyan-300" }, item.p, " DZD"))),
+                                    React.createElement('button', { onClick: () => setSelectedRecipe(null), className: "mt-2 w-full bg-cyan-950/60 border border-cyan-900/30 py-0.5 rounded-md text-xs" }, "Fermer")
+                                )
+                            )
+                        )
+                    );
+                };
+                
+                // Modale d'édition
+                const EditModalComponent = () => {
+                    if (!editModal.open) return null;
+                    return React.createElement('div', { className: "fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4", onClick: closeEditModal },
+                        React.createElement('div', { className: "bg-gray-900/90 backdrop-blur-md rounded-xl border border-cyan-900/50 max-w-sm w-full p-4", onClick: e => e.stopPropagation() },
+                            React.createElement('h3', { className: "text-lg font-bold mb-3 text-cyan-400" }, "Éditer " + (editModal.type === 'category' ? 'la catégorie' : 'le produit')),
+                            React.createElement('input', { type: "text", value: tempEditName, onChange: e => setTempEditName(e.target.value), className: "w-full bg-gray-800/80 p-1.5 rounded-md mb-2 border border-cyan-900/30 text-sm", placeholder: "Nom", autoFocus: true }),
+                            editModal.type !== 'category' && React.createElement('input', { type: "number", value: tempEditPrice, onChange: e => setTempEditPrice(parseInt(e.target.value) || 0), className: "w-full bg-gray-800/80 p-1.5 rounded-md mb-2 border border-cyan-900/30 text-sm", placeholder: "Prix" }),
+                            React.createElement('div', { className: "mb-2" },
+                                React.createElement('label', { className: "block text-xs mb-0.5 text-cyan-300" }, "Image depuis fichier :"),
+                                React.createElement('input', { type: "file", accept: "image/*", onChange: handleEditFileUpload, className: "text-xs mb-1" }),
+                                editUploading && React.createElement('p', { className: "text-yellow-400 text-[10px]" }, "Upload...")
+                            ),
+                            React.createElement('div', { className: "mb-2 border-t border-cyan-900/30 pt-2" },
+                                React.createElement('label', { className: "block text-xs mb-0.5 text-cyan-300" }, "URL Flaticon :"),
+                                React.createElement('div', { className: "flex gap-1" },
+                                    React.createElement('input', { type: "text", value: tempEditUrlImport, onChange: e => setTempEditUrlImport(e.target.value), placeholder: "Collez le lien", className: "flex-1 bg-gray-800/80 text-xs p-1 rounded-md border border-cyan-900/30" }),
+                                    React.createElement('button', { onClick: handleImportUrl, disabled: urlImportLoading, className: "bg-blue-950/60 border border-blue-900/30 px-2 py-1 rounded-md text-[10px]" }, urlImportLoading ? "⏳" : "📥")
+                                ),
+                                urlImportLoading && React.createElement('p', { className: "text-yellow-400 text-[9px] mt-0.5" }, "Chargement...")
+                            ),
+                            tempEditImageUrl && React.createElement('div', { className: "mt-1 flex items-center gap-2" },
+                                React.createElement('img', { src: tempEditImageUrl, className: "w-10 h-10 rounded object-cover" }),
+                                React.createElement('button', { onClick: () => setTempEditImageUrl(''), className: "text-red-400 text-[10px]" }, "Supprimer")
+                            ),
+                            React.createElement('div', { className: "flex gap-2 mt-3" },
+                                React.createElement('button', { onClick: saveEdit, className: "flex-1 bg-green-950/60 border border-green-900/30 py-1 rounded-md text-sm" }, "Valider"),
+                                React.createElement('button', { onClick: closeEditModal, className: "flex-1 bg-gray-800/60 border border-gray-700/30 py-1 rounded-md text-sm" }, "Annuler")
+                            )
+                        )
+                    );
+                };
+                
+                // Navigation principale
+                const MainContent = () => {
+                    if (isTablet) {
+                        return React.createElement('div', { className: "flex flex-1 overflow-hidden" },
+                            React.createElement('div', { className: "flex-1 overflow-y-auto p-2 border-r border-cyan-900/30" }, React.createElement(SellView, null)),
+                            React.createElement('div', { className: "w-1/3 overflow-y-auto p-2 border-r border-cyan-900/30" }, React.createElement(JournalView, null)),
+                            React.createElement('div', { className: "w-1/3 overflow-y-auto p-2" }, React.createElement(SyncView, null))
+                        );
+                    }
+                    return React.createElement('div', { className: "flex flex-col h-full overflow-hidden" },
+                        React.createElement('div', { className: "flex-1 overflow-y-auto" },
+                            activeTab === 'sell' && React.createElement(SellView, null),
+                            activeTab === 'journal' && React.createElement(JournalView, null),
+                            activeTab === 'sync' && React.createElement(SyncView, null)
+                        ),
+                        React.createElement('div', { className: "flex-shrink-0 bg-gray-900/80 backdrop-blur-sm border-t border-cyan-900/30 flex justify-around items-center py-1 px-2" },
+                            React.createElement('button', { onClick: () => setActiveTab('sell'), className: `flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg ${activeTab === 'sell' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-gray-400 hover:text-cyan-300'}` }, React.createElement('span', { className: "text-xl" }, "🛒"), React.createElement('span', { className: "text-[10px] font-bold" }, "Vendre")),
+                            React.createElement('button', { onClick: () => setActiveTab('journal'), className: `flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg ${activeTab === 'journal' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-gray-400 hover:text-cyan-300'}` }, React.createElement('span', { className: "text-xl" }, "📋"), React.createElement('span', { className: "text-[10px] font-bold" }, "Journal")),
+                            React.createElement('button', { onClick: () => setActiveTab('sync'), className: `flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg ${activeTab === 'sync' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-gray-400 hover:text-cyan-300'}` }, React.createElement('span', { className: "text-xl" }, "🔄"), React.createElement('span', { className: "text-[10px] font-bold" }, "Synchro")),
+                            React.createElement('button', { 
+                                onClick: handleOptionsClick,
+                                onTouchStart: (e) => { optionsPressTimer.current = setTimeout(() => handleOptionsLongPress(), 500); },
+                                onTouchEnd: (e) => { if (optionsPressTimer.current) { clearTimeout(optionsPressTimer.current); optionsPressTimer.current = null; } },
+                                onMouseDown: (e) => { optionsPressTimer.current = setTimeout(() => handleOptionsLongPress(), 500); },
+                                onMouseUp: (e) => { if (optionsPressTimer.current) { clearTimeout(optionsPressTimer.current); optionsPressTimer.current = null; } },
+                                className: "flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg text-gray-400 hover:text-cyan-300"
+                            }, React.createElement('span', { className: "text-xl" }, "⚙️"), React.createElement('span', { className: "text-[10px] font-bold" }, "Options"))
+                        ),
+                        React.createElement('div', { className: "text-center py-1 text-[9px] text-gray-500/50 border-t border-cyan-900/20" }, "Made by Brahim Laiche 2026")
+                    );
+                };
+                
+                return React.createElement('div', { className: `fixed inset-0 bg-gray-950 text-white flex flex-col overflow-hidden ${isEditingMode ? 'edit-mode' : ''}` },
+                    React.createElement(MainContent, null),
+                    React.createElement(OptionsModal, null),
+                    React.createElement(EditModalComponent, null)
+                );
+            };
+            
+            const root = ReactDOM.createRoot(document.getElementById('root'));
+            root.render(React.createElement(CafeteriaApp));
+        })();
+    </script>
+
+<script>if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));}</script>
+</body>
+</html>
