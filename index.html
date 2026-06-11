@@ -49,6 +49,42 @@
             box-shadow: 0 0 12px rgba(6, 182, 212, 0.2);
         }
         input, textarea { font-size: 16px; }
+        .num-pad, .confirm-modal {
+            animation: fadeIn 0.2s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .floating-btn {
+            position: fixed;
+            bottom: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background-color: #1f2937;
+            border: 1px solid #06b6d4;
+            border-radius: 9999px;
+            padding: 10px 20px;
+            font-size: 12px;
+            font-weight: bold;
+            color: #06b6d4;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            backdrop-filter: blur(4px);
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .floating-btn:hover {
+            background-color: #06b6d4;
+            color: #0f172a;
+        }
+        .category-item {
+            transition: all 0.2s;
+        }
+        .products-list {
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
     </style>
 </head>
 <body class="bg-gray-950 text-white antialiased overflow-hidden">
@@ -91,20 +127,67 @@
                     return saved ? JSON.parse(saved) : JSON.parse(JSON.stringify(BASE_MENU));
                 });
                 
+                // Gestion des stocks
+                const [stocks, setStocks] = useState(() => {
+                    const saved = localStorage.getItem("cafeteria_stocks");
+                    if (saved) return JSON.parse(saved);
+                    const initialStocks = {};
+                    Object.keys(BASE_MENU).forEach(catKey => {
+                        BASE_MENU[catKey].items.forEach(item => {
+                            initialStocks[item.n] = 0;
+                        });
+                    });
+                    return initialStocks;
+                });
+                
+                // Pavé numérique pour l'approvisionnement
+                const [stockModal, setStockModal] = useState({ open: false, product: null, currentQty: 0, inputValue: '' });
+                
                 // État pour les sons
                 const [soundEnabled, setSoundEnabled] = useState(() => {
                     const saved = localStorage.getItem("cafeteria_sound_enabled");
                     return saved !== null ? saved === 'true' : true;
                 });
                 
-                // Modale de détail d'une recette (indépendante)
+                // Modales
+                const [isModalOpen, setIsModalOpen] = useState(false);
+                const [showHistory, setShowHistory] = useState(false);
+                const [showSyncPanel, setShowSyncPanel] = useState(false);
+                const [showImagePanel, setShowImagePanel] = useState(false);
                 const [selectedRecipeDetail, setSelectedRecipeDetail] = useState(null);
+                const [showAdvancedEdit, setShowAdvancedEdit] = useState(false);
+                const [showAddCategory, setShowAddCategory] = useState(false);
+                const [showAddProduct, setShowAddProduct] = useState(false);
+                const [showManageItems, setShowManageItems] = useState(false);
+                const [expandedCategory, setExpandedCategory] = useState(null);
+                
+                // État pour la confirmation interne
+                const [confirmModal, setConfirmModal] = useState({ open: false, message: '', onConfirm: null, onCancel: null });
+                
+                // Formulaire ajout catégorie
+                const [newCategoryName, setNewCategoryName] = useState('');
+                const [newCategoryImageUrl, setNewCategoryImageUrl] = useState('');
+                const [newCategoryImageImport, setNewCategoryImageImport] = useState('');
+                const [newCategoryUploading, setNewCategoryUploading] = useState(false);
+                
+                // Formulaire ajout produit
+                const [newProductCategory, setNewProductCategory] = useState('');
+                const [newProductName, setNewProductName] = useState('');
+                const [newProductPrice, setNewProductPrice] = useState('');
+                const [newProductStock, setNewProductStock] = useState('');
+                const [newProductImageUrl, setNewProductImageUrl] = useState('');
+                const [newProductImageImport, setNewProductImageImport] = useState('');
+                const [newProductUploading, setNewProductUploading] = useState(false);
                 
                 // Audio
                 const audioCtx = useRef(null);
                 const cashSoundRef = useRef(null);
                 
-                // Sauvegarde de l'état des sons
+                // Sauvegardes
+                useEffect(() => {
+                    localStorage.setItem("cafeteria_stocks", JSON.stringify(stocks));
+                }, [stocks]);
+                
                 useEffect(() => {
                     localStorage.setItem("cafeteria_sound_enabled", soundEnabled);
                 }, [soundEnabled]);
@@ -113,6 +196,7 @@
                     audioCtx.current = new (window.AudioContext || window.webkitAudioContext)();
                     cashSoundRef.current = new Audio("https://orangefreesounds.com/wp-content/uploads/2026/01/Cash-register-cha-ching-sound-effect.mp3");
                     cashSoundRef.current.preload = "auto";
+                    cashSoundRef.current.volume = 0.5;
                     return () => {
                         if (audioCtx.current) audioCtx.current.close();
                         if (cashSoundRef.current) cashSoundRef.current.pause();
@@ -143,11 +227,7 @@
                     }
                 };
                 
-                // Modales
-                const [isModalOpen, setIsModalOpen] = useState(false);
-                const [showHistory, setShowHistory] = useState(false);
-                const [showSyncPanel, setShowSyncPanel] = useState(false);
-                const [showImagePanel, setShowImagePanel] = useState(false);
+                // Autres états (upload, etc.)
                 const [imgbbApiKey, setImgbbApiKey] = useState('');
                 const [imgbbApiKeySaved, setImgbbApiKeySaved] = useState('');
                 const [uploadedImageUrl, setUploadedImageUrl] = useState('');
@@ -190,7 +270,7 @@
                     return () => window.removeEventListener("resize", handleResize);
                 }, []);
                 
-                // Upload images (inchangé)
+                // Upload images générique
                 const resizeImage = (file) => new Promise((resolve, reject) => {
                     const reader = new FileReader();
                     reader.onload = (e) => {
@@ -263,24 +343,55 @@
                 
                 // Métier
                 const handleAddToCart = (item) => { playClickSound(); setCart(prev => [...prev, item]); };
+                
                 const handleUndoLastRecipe = () => {
                     if (!recipes.length) return;
                     playClickSound();
                     const last = recipes[recipes.length-1];
                     setRecipes(prev => prev.slice(0,-1));
                     setCart(prev => [...prev, ...last.items]);
+                    const refundTx = {
+                        uuid: generateUUID(),
+                        timestamp: Date.now(),
+                        item: { n: `ANNULATION - ${last.items.map(i=>i.n).join(', ')}`, p: -last.total },
+                        isRefund: true,
+                        originalRecipeId: last.uuid
+                    };
+                    setTransactions(prev => [...prev, refundTx]);
                     setTransactions(prev => prev.filter(t => t.timestamp !== last.timestamp));
                 };
+                
                 const handleClearCart = () => { if (cart.length) { playClickSound(); setCart([]); } };
+                
                 const handleCash = () => {
                     if (!cart.length) return;
                     playCashSound();
-                    const recipe = { uuid: generateUUID(), timestamp: Date.now(), items: [...cart], total: cart.reduce((s,i)=>s+i.p,0) };
+                    const recipe = { 
+                        uuid: generateUUID(), 
+                        timestamp: Date.now(), 
+                        items: [...cart], 
+                        total: cart.reduce((s,i)=>s+i.p,0) 
+                    };
                     setRecipes(prev => [...prev, recipe]);
-                    const newTx = cart.map(item => ({ uuid: generateUUID(), timestamp: recipe.timestamp, item }));
+                    const newTx = cart.map(item => ({ 
+                        uuid: generateUUID(), 
+                        timestamp: recipe.timestamp, 
+                        item, 
+                        isRefund: false 
+                    }));
                     setTransactions(prev => [...prev, ...newTx]);
+                    setStocks(prevStocks => {
+                        const newStocks = { ...prevStocks };
+                        cart.forEach(item => {
+                            const productName = item.n;
+                            const currentStock = newStocks[productName] || 0;
+                            newStocks[productName] = currentStock - 1;
+                        });
+                        return newStocks;
+                    });
                     setCart([]);
                 };
+                
                 const cartTotal = useMemo(() => cart.reduce((s,i)=>s+i.p,0), [cart]);
                 const hasRecipes = recipes.length > 0;
                 
@@ -310,7 +421,7 @@
                     return recipes.filter(r => new Date(r.timestamp).toDateString() === today);
                 };
                 
-                // Gestion édition (inchangée)
+                // Gestion édition (long press)
                 const openEditModal = (type, catKey, idx=null) => {
                     if (type === 'category') {
                         const cat = customMenu[catKey];
@@ -386,6 +497,125 @@
                     else { setUploadMessage("Clé vide"); setImgbbApiKeySaved(''); }
                 };
                 
+                // Approvisionnement
+                const openStockModal = (product) => {
+                    const currentStock = stocks[product.n] || 0;
+                    setStockModal({ open: true, product, currentQty: currentStock, inputValue: '' });
+                };
+                
+                const closeStockModal = () => {
+                    setStockModal({ open: false, product: null, currentQty: 0, inputValue: '' });
+                };
+                
+                const addToStock = () => {
+                    const qty = parseInt(stockModal.inputValue, 10);
+                    if (isNaN(qty) || qty === 0) {
+                        setConfirmModal({ open: true, message: "Veuillez entrer une quantité valide (différente de zéro)", onConfirm: null, onCancel: null });
+                        return;
+                    }
+                    const newStock = (stocks[stockModal.product.n] || 0) + qty;
+                    setStocks(prev => ({ ...prev, [stockModal.product.n]: newStock }));
+                    playClickSound();
+                    closeStockModal();
+                };
+                
+                // Fonctions pour l'édition avancée
+                const handleAddCategory = async () => {
+                    if (!newCategoryName.trim()) {
+                        setConfirmModal({ open: true, message: "Le nom de la catégorie est requis", onConfirm: null, onCancel: null });
+                        return;
+                    }
+                    // Générer une clé unique pour la nouvelle catégorie
+                    const newKey = newCategoryName.toLowerCase().replace(/\s+/g, '_') + '_' + Date.now();
+                    const newCategory = {
+                        label: newCategoryName,
+                        color: '#6b7280',
+                        items: []
+                    };
+                    if (newCategoryImageUrl) newCategory.imageUrl = newCategoryImageUrl;
+                    setCustomMenu(prev => ({ ...prev, [newKey]: newCategory }));
+                    setNewCategoryName('');
+                    setNewCategoryImageUrl('');
+                    setNewCategoryImageImport('');
+                    setShowAddCategory(false);
+                    playClickSound();
+                };
+                
+                const handleAddProduct = async () => {
+                    if (!newProductName.trim()) {
+                        setConfirmModal({ open: true, message: "Le nom du produit est requis", onConfirm: null, onCancel: null });
+                        return;
+                    }
+                    if (!newProductPrice || parseFloat(newProductPrice) <= 0) {
+                        setConfirmModal({ open: true, message: "Le prix doit être un nombre positif", onConfirm: null, onCancel: null });
+                        return;
+                    }
+                    const newProduct = {
+                        n: newProductName,
+                        p: parseFloat(newProductPrice)
+                    };
+                    if (newProductImageUrl) newProduct.imageUrl = newProductImageUrl;
+                    
+                    setCustomMenu(prev => {
+                        const newMenu = JSON.parse(JSON.stringify(prev));
+                        if (!newMenu[newProductCategory]) {
+                            setConfirmModal({ open: true, message: "Catégorie introuvable", onConfirm: null, onCancel: null });
+                            return prev;
+                        }
+                        newMenu[newProductCategory].items.push(newProduct);
+                        return newMenu;
+                    });
+                    
+                    // Initialiser le stock pour ce nouveau produit
+                    if (newProductStock && parseFloat(newProductStock) > 0) {
+                        setStocks(prev => ({ ...prev, [newProductName]: parseFloat(newProductStock) }));
+                    }
+                    
+                    setNewProductName('');
+                    setNewProductPrice('');
+                    setNewProductStock('');
+                    setNewProductImageUrl('');
+                    setNewProductImageImport('');
+                    setShowAddProduct(false);
+                    playClickSound();
+                };
+                
+                const deleteCategory = (catKey) => {
+                    setConfirmModal({
+                        open: true,
+                        message: `Supprimer la catégorie "${customMenu[catKey].label}" et tous ses produits ?`,
+                        onConfirm: () => {
+                            setCustomMenu(prev => {
+                                const newMenu = { ...prev };
+                                delete newMenu[catKey];
+                                return newMenu;
+                            });
+                            if (activeCategory === catKey) setActiveCategory(Object.keys(customMenu)[0] || 'coffee');
+                            playClickSound();
+                        },
+                        onCancel: null
+                    });
+                };
+                
+                const deleteProduct = (catKey, productName, productIndex) => {
+                    setConfirmModal({
+                        open: true,
+                        message: `Supprimer le produit "${productName}" ?`,
+                        onConfirm: () => {
+                            setCustomMenu(prev => {
+                                const newMenu = JSON.parse(JSON.stringify(prev));
+                                newMenu[catKey].items.splice(productIndex, 1);
+                                if (newMenu[catKey].items.length === 0) {
+                                    // Optionnel : supprimer la catégorie si vide
+                                }
+                                return newMenu;
+                            });
+                            playClickSound();
+                        },
+                        onCancel: null
+                    });
+                };
+                
                 // Long press
                 const handlePressStart = (type, catKey, idx=null) => (e) => {
                     if (!isEditingMode) return;
@@ -397,9 +627,111 @@
                 const handleOptionsClick = (e) => { e.preventDefault(); e.stopPropagation(); setIsModalOpen(true); };
                 const handleOptionsLongPress = () => { setIsEditingMode(!isEditingMode); };
                 
-                // ========== NOUVELLES VUES ==========
+                // Upload d'image pour les formulaires d'ajout
+                const handleNewCategoryImageUpload = async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    setNewCategoryUploading(true);
+                    const url = await uploadFile(file);
+                    if (url) setNewCategoryImageUrl(url);
+                    setNewCategoryUploading(false);
+                    e.target.value = '';
+                };
                 
-                // Vue "Recette du jour" (avec heure formatée hh:mm)
+                const handleNewCategoryImageImport = async () => {
+                    if (!newCategoryImageImport) return;
+                    setNewCategoryUploading(true);
+                    const url = await importFromUrl(newCategoryImageImport);
+                    if (url) setNewCategoryImageUrl(url);
+                    setNewCategoryUploading(false);
+                };
+                
+                const handleNewProductImageUpload = async (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    setNewProductUploading(true);
+                    const url = await uploadFile(file);
+                    if (url) setNewProductImageUrl(url);
+                    setNewProductUploading(false);
+                    e.target.value = '';
+                };
+                
+                const handleNewProductImageImport = async () => {
+                    if (!newProductImageImport) return;
+                    setNewProductUploading(true);
+                    const url = await importFromUrl(newProductImageImport);
+                    if (url) setNewProductImageUrl(url);
+                    setNewProductUploading(false);
+                };
+                
+                // Modale de confirmation interne
+                const ConfirmModal = () => {
+                    if (!confirmModal.open) return null;
+                    return React.createElement('div', { className: "fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[300] p-4", onClick: () => {
+                        if (confirmModal.onCancel) confirmModal.onCancel();
+                        setConfirmModal({ open: false, message: '', onConfirm: null, onCancel: null });
+                    } },
+                        React.createElement('div', { className: "bg-gray-900/90 rounded-xl border border-cyan-900/50 w-64 p-4 confirm-modal", onClick: e => e.stopPropagation() },
+                            React.createElement('p', { className: "text-center text-sm mb-4" }, confirmModal.message),
+                            React.createElement('div', { className: "flex gap-2" },
+                                React.createElement('button', { 
+                                    onClick: () => {
+                                        if (confirmModal.onConfirm) confirmModal.onConfirm();
+                                        setConfirmModal({ open: false, message: '', onConfirm: null, onCancel: null });
+                                    }, 
+                                    className: "flex-1 bg-green-950/60 border border-green-900/30 py-2 rounded-md text-sm font-bold hover:border-green-500/50" 
+                                }, "✓ Confirmer"),
+                                React.createElement('button', { 
+                                    onClick: () => {
+                                        if (confirmModal.onCancel) confirmModal.onCancel();
+                                        setConfirmModal({ open: false, message: '', onConfirm: null, onCancel: null });
+                                    }, 
+                                    className: "flex-1 bg-gray-800/60 border border-gray-700/30 py-2 rounded-md text-sm font-bold hover:border-gray-500/50" 
+                                }, "✗ Annuler")
+                            )
+                        )
+                    );
+                };
+                
+                // ========== VUES ==========
+                
+                // Vue Saloon (inchangée)
+                const SellView = () => React.createElement('div', { className: "flex flex-col h-full overflow-hidden p-2" },
+                    React.createElement('div', { className: "flex-shrink-0 mb-2 grid grid-cols-5 gap-1.5" },
+                        Object.keys(customMenu).map(key => 
+                            React.createElement(CategoryButton, { key: key, menuKey: key, cat: customMenu[key], isActive: activeCategory === key })
+                        )
+                    ),
+                    React.createElement('div', { className: "flex-shrink-0 mb-2 grid grid-cols-4 gap-1.5" },
+                        customMenu[activeCategory].items.map((item, idx) => 
+                            React.createElement(ProductButton, { key: idx, item: item, idx: idx, catKey: activeCategory })
+                        )
+                    ),
+                    React.createElement('div', { className: "flex-1 flex flex-col min-h-0" },
+                        React.createElement('div', { className: "bg-gray-900/40 backdrop-blur-sm rounded-lg border border-cyan-900/30 flex flex-col h-full overflow-hidden p-2" },
+                            React.createElement('h2', { className: "text-cyan-400 font-bold text-sm mb-2 flex items-center gap-1" }, React.createElement('span', { className: "text-lg" }, "🍽️"), "Saloon (commandes)"),
+                            React.createElement('div', { className: "flex-1 overflow-y-auto space-y-1 text-base min-h-[60px]" },
+                                cart.length === 0 ? React.createElement('p', { className: "text-gray-400 text-base" }, "Aucun produit") :
+                                cart.map((item, idx) => React.createElement('div', { key: idx, className: "flex justify-between border-b border-cyan-900/20 py-2" },
+                                    React.createElement('span', { className: "font-bold text-base" }, item.n),
+                                    React.createElement('span', { className: "font-mono text-cyan-300 text-base" }, item.p, " DZD")
+                                ))
+                            ),
+                            React.createElement('button', { onClick: handleClearCart, disabled: cart.length === 0, className: "w-full bg-red-950/60 border border-red-900/30 py-1 rounded-md text-sm font-bold " + (cart.length === 0 ? 'opacity-40' : 'hover:border-red-500/50 active:scale-95') }, "🗑️ Vider"),
+                            React.createElement('div', { className: "border-t border-cyan-900/30 mt-2 pt-2 flex justify-between items-center gap-2" },
+                                React.createElement('button', { onClick: handleUndoLastRecipe, disabled: !hasRecipes, className: "bg-gray-800/60 border border-cyan-900/30 px-3 py-2 rounded-md text-sm font-bold flex items-center gap-1 " + (!hasRecipes ? 'opacity-40' : 'hover:border-cyan-500/50 active:scale-95') }, 
+                                    React.createElement('span', { className: "text-base" }, "◀"), "Retour"
+                                ),
+                                React.createElement('span', { className: "font-bold text-lg flex-1 text-center text-cyan-300" }, "💰 ", cartTotal, " DZD"),
+                                React.createElement('button', { onClick: handleCash, disabled: cart.length === 0, className: "bg-green-950/60 border border-green-900/30 px-3 py-2 rounded-md text-sm font-bold flex items-center gap-1 " + (cart.length === 0 ? 'opacity-50' : 'hover:border-green-500/50 active:scale-95') }, 
+                                    React.createElement('span', { className: "text-base" }, "💵"), "Cash"
+                                )
+                            )
+                        )
+                    )
+                );
+                
+                // Vue Recettes du jour (inchangée)
                 const RecipesView = () => {
                     const todayRecipes = getTodayRecipes();
                     const totalToday = todayRecipes.reduce((sum, r) => sum + r.total, 0);
@@ -437,32 +769,54 @@
                     );
                 };
                 
-                // Vue "Historique des transactions" (ancien journal) pour la modale Options
-                const HistoryView = () => {
-                    const totalAll = transactions.reduce((s, t) => s + t.item.p, 0);
-                    return React.createElement('div', { className: "mt-2 border-t border-cyan-900/30 pt-2" },
-                        React.createElement('h3', { className: "font-bold text-sm mb-2 flex items-center gap-1" }, React.createElement('span', { className: "text-sm" }, "📜"), "Historique complet"),
-                        React.createElement('div', { className: "max-h-60 overflow-y-auto space-y-1" },
-                            transactions.length === 0 ? 
-                                React.createElement('p', { className: "text-gray-400 text-xs" }, "Aucune transaction") :
-                                transactions.slice().reverse().map(t => 
-                                    React.createElement('div', { key: t.uuid, className: "flex justify-between border-b border-cyan-900/20 py-1 text-xs" },
-                                        React.createElement('span', {}, t.item.n),
-                                        React.createElement('span', { className: "font-mono text-cyan-300" }, t.item.p, " DZD"),
-                                        React.createElement('span', { className: "text-[9px] text-gray-400" }, new Date(t.timestamp).toLocaleTimeString())
-                                    )
-                                )
-                        ),
-                        React.createElement('div', { className: "border-t border-cyan-900/30 mt-2 pt-2 flex justify-between font-bold text-xs" },
-                            React.createElement('span', {}, "💰 TOTAL GÉNÉRAL"),
-                            React.createElement('span', { className: "text-cyan-400" }, totalAll, " DZD")
+                // Vue Approvisionnement (stock) inchangée
+                const SupplyView = () => {
+                    const productsByCategory = {};
+                    Object.keys(customMenu).forEach(catKey => {
+                        const category = customMenu[catKey];
+                        productsByCategory[catKey] = {
+                            label: category.label,
+                            items: category.items
+                        };
+                    });
+                    
+                    return React.createElement('div', { className: "flex-1 flex flex-col p-2 overflow-y-auto" },
+                        React.createElement('div', { className: "bg-gray-900/40 backdrop-blur-sm rounded-lg border border-cyan-900/30 p-2" },
+                            React.createElement('h2', { className: "text-cyan-400 font-bold text-sm mb-2 flex items-center gap-1" }, React.createElement('span', { className: "text-sm" }, "📦"), "Approvisionnement - Gestion des stocks"),
+                            React.createElement('div', { className: "space-y-4" },
+                                Object.keys(productsByCategory).map(catKey => {
+                                    const cat = productsByCategory[catKey];
+                                    return React.createElement('div', { key: catKey, className: "border border-cyan-900/30 rounded-lg p-2" },
+                                        React.createElement('h3', { className: "font-bold text-cyan-300 text-sm mb-2 px-1" }, cat.label),
+                                        React.createElement('div', { className: "grid grid-cols-4 gap-2" },
+                                            cat.items.map((item, idx) => {
+                                                const stock = stocks[item.n] || 0;
+                                                let borderClass = "border border-cyan-900/30";
+                                                if (stock < 10) borderClass = "border-2 border-red-500";
+                                                else if (stock < 20) borderClass = "border-2 border-yellow-500";
+                                                
+                                                return React.createElement('button', { 
+                                                    key: idx, 
+                                                    onClick: () => openStockModal(item),
+                                                    className: `bg-gray-800/60 ${borderClass} rounded-lg p-2 text-center hover:border-cyan-500/50 transition-all aspect-square flex flex-col items-center justify-center`
+                                                },
+                                                    item.imageUrl ? React.createElement('img', { src: item.imageUrl, alt: item.n, className: "w-8 h-8 object-contain mb-1" }) : null,
+                                                    React.createElement('span', { className: "font-bold text-[10px]" }, item.n),
+                                                    React.createElement('span', { className: "text-[8px] text-cyan-300" }, item.p, " DZD"),
+                                                    React.createElement('span', { className: "text-[8px] text-green-400 mt-1" }, "Stock: ", stock)
+                                                );
+                                            })
+                                        )
+                                    );
+                                })
+                            )
                         )
                     );
                 };
                 
-                // Composants de rendu (CategoryButton, ProductButton inchangés)
+                // Composants CategoryButton et ProductButton (inchangés)
                 const CategoryButton = ({ menuKey, cat, isActive }) => {
-                    const baseColor = BASE_MENU[menuKey].color;
+                    const baseColor = BASE_MENU[menuKey]?.color || '#6b7280';
                     const imageUrl = cat.imageUrl;
                     const activeClass = isActive 
                         ? "border-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.3)] bg-gray-800/80" 
@@ -514,67 +868,7 @@
                     );
                 };
                 
-                // Vue Vendre (avec bouton retour repositionné)
-                const SellView = () => React.createElement('div', { className: "flex flex-col h-full overflow-hidden p-2" },
-                    React.createElement('div', { className: "flex-shrink-0 mb-2 grid grid-cols-5 gap-1.5" },
-                        Object.keys(customMenu).map(key => 
-                            React.createElement(CategoryButton, { key: key, menuKey: key, cat: customMenu[key], isActive: activeCategory === key })
-                        )
-                    ),
-                    React.createElement('div', { className: "flex-shrink-0 mb-2 grid grid-cols-4 gap-1.5" },
-                        customMenu[activeCategory].items.map((item, idx) => 
-                            React.createElement(ProductButton, { key: idx, item: item, idx: idx, catKey: activeCategory })
-                        )
-                    ),
-                    React.createElement('div', { className: "flex-1 flex flex-col min-h-0" },
-                        React.createElement('div', { className: "bg-gray-900/40 backdrop-blur-sm rounded-lg border border-cyan-900/30 flex flex-col h-full overflow-hidden p-2" },
-                            React.createElement('h2', { className: "text-cyan-400 font-bold text-sm mb-2 flex items-center gap-1" }, React.createElement('span', { className: "text-lg" }, "🛒"), "Commande en cours"),
-                            React.createElement('div', { className: "flex-1 overflow-y-auto space-y-1 text-base min-h-[60px]" },
-                                cart.length === 0 ? React.createElement('p', { className: "text-gray-400 text-base" }, "Aucun produit") :
-                                cart.map((item, idx) => React.createElement('div', { key: idx, className: "flex justify-between border-b border-cyan-900/20 py-2" },
-                                    React.createElement('span', { className: "font-bold text-base" }, item.n),
-                                    React.createElement('span', { className: "font-mono text-cyan-300 text-base" }, item.p, " DZD")
-                                ))
-                            ),
-                            React.createElement('button', { onClick: handleClearCart, disabled: cart.length === 0, className: "w-full bg-red-950/60 border border-red-900/30 py-1 rounded-md text-sm font-bold " + (cart.length === 0 ? 'opacity-40' : 'hover:border-red-500/50 active:scale-95') }, "🗑️ Vider"),
-                            React.createElement('div', { className: "border-t border-cyan-900/30 mt-2 pt-2 flex justify-between items-center gap-2" },
-                                React.createElement('button', { onClick: handleUndoLastRecipe, disabled: !hasRecipes, className: "bg-gray-800/60 border border-cyan-900/30 px-3 py-2 rounded-md text-sm font-bold flex items-center gap-1 " + (!hasRecipes ? 'opacity-40' : 'hover:border-cyan-500/50 active:scale-95') }, 
-                                    React.createElement('span', { className: "text-base" }, "◀"), "Retour"
-                                ),
-                                React.createElement('span', { className: "font-bold text-lg flex-1 text-center text-cyan-300" }, "💰 ", cartTotal, " DZD"),
-                                React.createElement('button', { onClick: handleCash, disabled: cart.length === 0, className: "bg-green-950/60 border border-green-900/30 px-3 py-2 rounded-md text-sm font-bold flex items-center gap-1 " + (cart.length === 0 ? 'opacity-50' : 'hover:border-green-500/50 active:scale-95') }, 
-                                    React.createElement('span', { className: "text-base" }, "💵"), "Cash"
-                                )
-                            )
-                        )
-                    )
-                );
-                
-                // Vue Synchro (inchangée)
-                const SyncView = () => React.createElement('div', { className: "flex-1 flex flex-col p-2 overflow-y-auto" },
-                    React.createElement('div', { className: "bg-gray-900/40 backdrop-blur-sm rounded-lg border border-cyan-900/30 p-2 space-y-2" },
-                        React.createElement('h2', { className: "text-indigo-400 font-bold text-sm flex items-center gap-1" }, React.createElement('span', { className: "text-sm" }, "🔄"), "Synchronisation"),
-                        React.createElement('button', { onClick: exportData, className: "w-full bg-gray-800/60 border border-cyan-900/30 py-1 rounded-md text-[11px] font-bold hover:border-cyan-500/50 active:scale-95" }, "📤 Exporter les transactions"),
-                        isTablet && exportJsonText && React.createElement('textarea', { readOnly: true, value: exportJsonText, className: "w-full h-20 bg-gray-900/80 text-cyan-300 text-[10px] p-1 rounded-md border border-cyan-900/30" }),
-                        !isTablet && qrCodeUrl && React.createElement('img', { src: qrCodeUrl, className: "mx-auto w-24 h-24 bg-white p-1 rounded-md" }),
-                        React.createElement('textarea', { value: importJsonText, onChange: e => setImportJsonText(e.target.value), className: "w-full h-16 bg-gray-900/80 text-white text-[10px] p-1 rounded-md border border-cyan-900/30", placeholder: "Collez le JSON" }),
-                        React.createElement('button', { onClick: importAndMerge, className: "w-full bg-cyan-950/60 border border-cyan-900/30 py-1 rounded-md text-[11px] font-bold hover:border-cyan-500/50 active:scale-95" }, "📥 Importer et fusionner"),
-                        React.createElement('hr', { className: "border-cyan-900/30" }),
-                        React.createElement('h3', { className: "font-bold text-cyan-400 text-xs" }, "🖼️ Gestion des images"),
-                        React.createElement('input', { type: "text", value: imgbbApiKey, onChange: e => setImgbbApiKey(e.target.value), className: "w-full bg-gray-900/80 p-1 rounded-md border border-cyan-900/30 text-[10px]", placeholder: "Clé API ImgBB" }),
-                        React.createElement('button', { onClick: saveApiKey, className: "bg-blue-950/60 border border-blue-900/30 px-2 py-0.5 rounded-md text-[10px] hover:border-blue-500/50 active:scale-95" }, "💾 Sauvegarder"),
-                        React.createElement('input', { type: "file", accept: "image/*", ref: fileInputRef, onChange: handleGeneralFileUpload, className: "text-[9px] mt-1" }),
-                        isUploading && React.createElement('p', { className: "text-yellow-400 text-[9px]" }, "Upload..."),
-                        uploadMessage && React.createElement('p', { className: "text-[9px] " + (uploadMessage.includes('✅') ? 'text-green-400' : 'text-red-400') }, uploadMessage),
-                        uploadedImageUrl && React.createElement('div', { className: "mt-1 p-1 bg-gray-800/60 rounded-md" },
-                            React.createElement('p', { className: "text-[8px] break-all" }, "URL: ", uploadedImageUrl),
-                            React.createElement('img', { src: uploadedImageUrl, className: "w-8 h-8 object-contain mt-0.5 rounded" }),
-                            React.createElement('button', { onClick: () => navigator.clipboard.writeText(uploadedImageUrl), className: "bg-gray-700/60 text-[9px] px-1 py-0.5 mt-0.5 rounded" }, "Copier")
-                        )
-                    )
-                );
-                
-                // Modale Options (avec Historique)
+                // Modale Options (inchangée)
                 const OptionsModal = () => {
                     if (!isModalOpen) return null;
                     return React.createElement('div', { className: "fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4", onClick: (e) => { if (e.target === e.currentTarget) setIsModalOpen(false); } },
@@ -591,34 +885,76 @@
                                 React.createElement('button', { onClick: () => { setSoundEnabled(!soundEnabled); }, className: "w-full py-2 rounded-lg text-sm border " + (soundEnabled ? 'bg-green-950/60 border-green-500/50' : 'bg-gray-950/60 border-gray-700/30') }, soundEnabled ? "🔊 Sons activés" : "🔇 Sons désactivés")
                             ),
                             showHistory && React.createElement(HistoryView, null),
-                            showSyncPanel && React.createElement('div', { className: "mt-2 border-t border-cyan-900/30 pt-2" },
-                                React.createElement('button', { onClick: () => setShowSyncPanel(false), className: "text-cyan-400 text-xs" }, "← Retour"),
-                                React.createElement('h3', { className: "font-bold text-sm mb-1" }, "Synchronisation"),
-                                React.createElement('button', { onClick: exportData, className: "w-full bg-gray-800/60 border border-cyan-900/30 py-1 rounded-md text-xs" }, "📤 Exporter"),
-                                isTablet && exportJsonText && React.createElement('textarea', { readOnly: true, value: exportJsonText, className: "w-full h-20 bg-gray-900/80 text-cyan-300 text-[10px] p-1 rounded-md mt-1" }),
-                                !isTablet && qrCodeUrl && React.createElement('img', { src: qrCodeUrl, className: "mx-auto w-24 h-24 bg-white p-1 rounded-md mt-1" }),
-                                React.createElement('textarea', { value: importJsonText, onChange: e => setImportJsonText(e.target.value), className: "w-full h-16 bg-gray-900/80 text-white text-[10px] p-1 rounded-md mt-1", placeholder: "JSON" }),
-                                React.createElement('button', { onClick: importAndMerge, className: "w-full bg-cyan-950/60 border border-cyan-900/30 py-1 rounded-md text-xs mt-1" }, "📥 Importer")
-                            ),
-                            showImagePanel && React.createElement('div', { className: "mt-2 border-t border-cyan-900/30 pt-2" },
-                                React.createElement('button', { onClick: () => setShowImagePanel(false), className: "text-cyan-400 text-xs" }, "← Retour"),
-                                React.createElement('h3', { className: "font-bold text-sm mb-1" }, "Gestion images"),
-                                React.createElement('input', { type: "text", value: imgbbApiKey, onChange: e => setImgbbApiKey(e.target.value), className: "w-full bg-gray-900/80 p-1 rounded-md border border-cyan-900/30 text-xs", placeholder: "Clé API" }),
-                                React.createElement('button', { onClick: saveApiKey, className: "bg-blue-950/60 border border-blue-900/30 px-2 py-0.5 rounded-md text-xs mt-1" }, "💾 Sauvegarder"),
-                                React.createElement('input', { type: "file", accept: "image/*", ref: fileInputRef, onChange: handleGeneralFileUpload, className: "text-xs mt-1" }),
-                                isUploading && React.createElement('p', { className: "text-yellow-400 text-[10px]" }, "Upload..."),
-                                uploadMessage && React.createElement('p', { className: "text-[10px] " + (uploadMessage.includes('✅') ? 'text-green-400' : 'text-red-400') }, uploadMessage),
-                                uploadedImageUrl && React.createElement('div', { className: "mt-1 p-1 bg-gray-800/60 rounded-md" },
-                                    React.createElement('p', { className: "text-[9px] break-all" }, "URL: ", uploadedImageUrl),
-                                    React.createElement('img', { src: uploadedImageUrl, className: "w-8 h-8 object-contain mt-0.5 rounded" }),
-                                    React.createElement('button', { onClick: () => navigator.clipboard.writeText(uploadedImageUrl), className: "bg-gray-700/60 text-[9px] px-1 py-0.5 mt-0.5 rounded" }, "Copier")
-                                )
-                            )
+                            showSyncPanel && React.createElement(SyncView, null),
+                            showImagePanel && React.createElement(ImagePanelView, null)
                         )
                     );
                 };
                 
-                // Modale de détail d'une recette (indépendante)
+                // Vue Historique (dans Options)
+                const HistoryView = () => {
+                    const normalTransactions = transactions.filter(t => !t.isRefund);
+                    const refundTransactions = transactions.filter(t => t.isRefund);
+                    const totalNormal = normalTransactions.reduce((s, t) => s + t.item.p, 0);
+                    const totalRefund = refundTransactions.reduce((s, t) => s + t.item.p, 0);
+                    const allTx = [...transactions].reverse();
+                    return React.createElement('div', { className: "mt-2 border-t border-cyan-900/30 pt-2" },
+                        React.createElement('h3', { className: "font-bold text-sm mb-2 flex items-center gap-1" }, React.createElement('span', { className: "text-sm" }, "📜"), "Historique complet"),
+                        React.createElement('div', { className: "max-h-60 overflow-y-auto space-y-1" },
+                            allTx.length === 0 ? 
+                                React.createElement('p', { className: "text-gray-400 text-xs" }, "Aucune transaction") :
+                                allTx.map(t => {
+                                    const date = new Date(t.timestamp);
+                                    const hours = date.getHours().toString().padStart(2, '0');
+                                    const minutes = date.getMinutes().toString().padStart(2, '0');
+                                    const timeStr = `${hours}:${minutes}`;
+                                    const isRefund = t.isRefund === true;
+                                    return React.createElement('div', { key: t.uuid, className: `flex justify-between border-b border-cyan-900/20 py-1 text-xs ${isRefund ? 'text-red-400' : ''}` },
+                                        React.createElement('span', { className: "w-12" }, timeStr),
+                                        React.createElement('span', { className: "flex-1 px-2" }, t.item.n),
+                                        React.createElement('span', { className: `font-mono text-right w-16 ${isRefund ? 'text-red-400' : 'text-cyan-300'}` }, t.item.p, " DZD")
+                                    );
+                                })
+                        ),
+                        React.createElement('div', { className: "border-t border-cyan-900/30 mt-2 pt-2 flex justify-between font-bold text-xs" },
+                            React.createElement('span', {}, "💰 TOTAL GÉNÉRAL (hors annulations)"),
+                            React.createElement('span', { className: "text-cyan-400" }, totalNormal, " DZD")
+                        ),
+                        refundTransactions.length > 0 && React.createElement('div', { className: "flex justify-between text-xs text-red-400 mt-1" },
+                            React.createElement('span', {}, "Total annulations"),
+                            React.createElement('span', {}, totalRefund, " DZD")
+                        )
+                    );
+                };
+                
+                // Vue Synchro (dans Options)
+                const SyncView = () => React.createElement('div', { className: "mt-2 border-t border-cyan-900/30 pt-2" },
+                    React.createElement('button', { onClick: () => setShowSyncPanel(false), className: "text-cyan-400 text-xs" }, "← Retour"),
+                    React.createElement('h3', { className: "font-bold text-sm mb-1" }, "Synchronisation"),
+                    React.createElement('button', { onClick: exportData, className: "w-full bg-gray-800/60 border border-cyan-900/30 py-1 rounded-md text-xs mt-1" }, "📤 Exporter les transactions"),
+                    isTablet && exportJsonText && React.createElement('textarea', { readOnly: true, value: exportJsonText, className: "w-full h-20 bg-gray-900/80 text-cyan-300 text-[10px] p-1 rounded-md mt-1" }),
+                    !isTablet && qrCodeUrl && React.createElement('img', { src: qrCodeUrl, className: "mx-auto w-24 h-24 bg-white p-1 rounded-md mt-1" }),
+                    React.createElement('textarea', { value: importJsonText, onChange: e => setImportJsonText(e.target.value), className: "w-full h-16 bg-gray-900/80 text-white text-[10px] p-1 rounded-md mt-1", placeholder: "Collez le JSON" }),
+                    React.createElement('button', { onClick: importAndMerge, className: "w-full bg-cyan-950/60 border border-cyan-900/30 py-1 rounded-md text-xs mt-1" }, "📥 Importer")
+                );
+                
+                // Vue Gestion images (dans Options)
+                const ImagePanelView = () => React.createElement('div', { className: "mt-2 border-t border-cyan-900/30 pt-2" },
+                    React.createElement('button', { onClick: () => setShowImagePanel(false), className: "text-cyan-400 text-xs" }, "← Retour"),
+                    React.createElement('h3', { className: "font-bold text-sm mb-1" }, "Gestion images"),
+                    React.createElement('input', { type: "text", value: imgbbApiKey, onChange: e => setImgbbApiKey(e.target.value), className: "w-full bg-gray-900/80 p-1 rounded-md border border-cyan-900/30 text-xs", placeholder: "Clé API" }),
+                    React.createElement('button', { onClick: saveApiKey, className: "bg-blue-950/60 border border-blue-900/30 px-2 py-0.5 rounded-md text-xs mt-1" }, "💾 Sauvegarder"),
+                    React.createElement('input', { type: "file", accept: "image/*", ref: fileInputRef, onChange: handleGeneralFileUpload, className: "text-xs mt-1" }),
+                    isUploading && React.createElement('p', { className: "text-yellow-400 text-[10px]" }, "Upload..."),
+                    uploadMessage && React.createElement('p', { className: "text-[10px] " + (uploadMessage.includes('✅') ? 'text-green-400' : 'text-red-400') }, uploadMessage),
+                    uploadedImageUrl && React.createElement('div', { className: "mt-1 p-1 bg-gray-800/60 rounded-md" },
+                        React.createElement('p', { className: "text-[8px] break-all" }, "URL: ", uploadedImageUrl),
+                        React.createElement('img', { src: uploadedImageUrl, className: "w-8 h-8 object-contain mt-0.5 rounded" }),
+                        React.createElement('button', { onClick: () => navigator.clipboard.writeText(uploadedImageUrl), className: "bg-gray-700/60 text-[9px] px-1 py-0.5 mt-0.5 rounded" }, "Copier")
+                    )
+                );
+                
+                // Modale détail recette (inchangée)
                 const RecipeDetailModal = () => {
                     if (!selectedRecipeDetail) return null;
                     return React.createElement('div', { className: "fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4", onClick: () => setSelectedRecipeDetail(null) },
@@ -642,7 +978,7 @@
                     );
                 };
                 
-                // Modale d'édition (inchangée)
+                // Modale édition (long press) inchangée
                 const EditModalComponent = () => {
                     if (!editModal.open) return null;
                     return React.createElement('div', { className: "fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4", onClick: closeEditModal },
@@ -675,25 +1011,231 @@
                     );
                 };
                 
-                // Navigation principale (modifiée pour l'onglet Recette)
+                // Pavé numérique stock (inchangé)
+                const StockNumPad = () => {
+                    if (!stockModal.open) return null;
+                    return React.createElement('div', { className: "fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[200] p-4", onClick: closeStockModal },
+                        React.createElement('div', { className: "bg-gray-900/90 rounded-xl border border-cyan-900/50 w-64 p-4 num-pad", onClick: e => e.stopPropagation() },
+                            React.createElement('h4', { className: "font-bold text-cyan-400 text-center mb-2" }, `Approvisionnement - ${stockModal.product.n}`),
+                            React.createElement('div', { className: "mb-3 text-center" },
+                                React.createElement('span', { className: "text-sm text-gray-400" }, "Stock actuel : "),
+                                React.createElement('span', { className: "text-xl font-bold text-cyan-300" }, stockModal.currentQty)
+                            ),
+                            React.createElement('input', { 
+                                type: "number", 
+                                value: stockModal.inputValue, 
+                                onChange: (e) => setStockModal(prev => ({ ...prev, inputValue: e.target.value })),
+                                className: "w-full bg-gray-800/80 text-white text-center text-xl p-2 rounded-md border border-cyan-900/30 mb-3",
+                                placeholder: "Quantité (+ ou -)",
+                                autoFocus: true
+                            }),
+                            React.createElement('div', { className: "flex gap-2" },
+                                React.createElement('button', { onClick: addToStock, className: "flex-1 bg-green-950/60 border border-green-900/30 py-2 rounded-md text-sm font-bold hover:border-green-500/50" }, "✓ Valider"),
+                                React.createElement('button', { onClick: closeStockModal, className: "flex-1 bg-gray-800/60 border border-gray-700/30 py-2 rounded-md text-sm font-bold hover:border-gray-500/50" }, "✗ Annuler")
+                            )
+                        )
+                    );
+                };
+                
+                // Modale Ajout Catégorie
+                const AddCategoryModal = () => {
+                    if (!showAddCategory) return null;
+                    return React.createElement('div', { className: "fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[150] p-4", onClick: () => setShowAddCategory(false) },
+                        React.createElement('div', { className: "bg-gray-900/90 rounded-xl border border-cyan-900/50 max-w-sm w-full p-4", onClick: e => e.stopPropagation() },
+                            React.createElement('div', { className: "flex justify-between items-center mb-3" },
+                                React.createElement('h3', { className: "text-lg font-bold text-cyan-400" }, "➕ Ajouter une catégorie"),
+                                React.createElement('button', { onClick: () => setShowAddCategory(false), className: "text-gray-400 text-xl hover:text-cyan-400" }, "✕")
+                            ),
+                            React.createElement('input', { 
+                                type: "text", 
+                                value: newCategoryName, 
+                                onChange: (e) => setNewCategoryName(e.target.value),
+                                className: "w-full bg-gray-800/80 p-2 rounded-md mb-3 border border-cyan-900/30 text-sm",
+                                placeholder: "Nom de la catégorie",
+                                autoFocus: true
+                            }),
+                            React.createElement('div', { className: "mb-2" },
+                                React.createElement('label', { className: "block text-xs mb-1 text-cyan-300" }, "Image (optionnelle) :"),
+                                React.createElement('div', { className: "flex gap-2 mb-2" },
+                                    React.createElement('input', { type: "file", accept: "image/*", onChange: handleNewCategoryImageUpload, className: "text-xs flex-1" }),
+                                    React.createElement('input', { type: "text", value: newCategoryImageImport, onChange: (e) => setNewCategoryImageImport(e.target.value), placeholder: "ou URL Flaticon", className: "flex-1 bg-gray-800/80 text-xs p-1 rounded-md border border-cyan-900/30" }),
+                                    React.createElement('button', { onClick: handleNewCategoryImageImport, disabled: newCategoryUploading, className: "bg-blue-950/60 px-2 py-1 rounded-md text-[10px]" }, "📥")
+                                ),
+                                newCategoryUploading && React.createElement('p', { className: "text-yellow-400 text-[10px]" }, "Upload..."),
+                                newCategoryImageUrl && React.createElement('div', { className: "mt-1 flex items-center gap-2" },
+                                    React.createElement('img', { src: newCategoryImageUrl, className: "w-8 h-8 rounded object-cover" }),
+                                    React.createElement('button', { onClick: () => setNewCategoryImageUrl(''), className: "text-red-400 text-[10px]" }, "Supprimer")
+                                )
+                            ),
+                            React.createElement('div', { className: "flex gap-2 mt-3" },
+                                React.createElement('button', { onClick: handleAddCategory, className: "flex-1 bg-green-950/60 border border-green-900/30 py-2 rounded-md text-sm font-bold hover:border-green-500/50" }, "✓ Valider"),
+                                React.createElement('button', { onClick: () => setShowAddCategory(false), className: "flex-1 bg-gray-800/60 border border-gray-700/30 py-2 rounded-md text-sm font-bold hover:border-gray-500/50" }, "✗ Annuler")
+                            )
+                        )
+                    );
+                };
+                
+                // Modale Ajout Produit
+                const AddProductModal = () => {
+                    if (!showAddProduct) return null;
+                    return React.createElement('div', { className: "fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[150] p-4", onClick: () => setShowAddProduct(false) },
+                        React.createElement('div', { className: "bg-gray-900/90 rounded-xl border border-cyan-900/50 max-w-sm w-full p-4", onClick: e => e.stopPropagation() },
+                            React.createElement('div', { className: "flex justify-between items-center mb-3" },
+                                React.createElement('h3', { className: "text-lg font-bold text-cyan-400" }, "➕ Ajouter un produit"),
+                                React.createElement('button', { onClick: () => setShowAddProduct(false), className: "text-gray-400 text-xl hover:text-cyan-400" }, "✕")
+                            ),
+                            React.createElement('select', { 
+                                value: newProductCategory, 
+                                onChange: (e) => setNewProductCategory(e.target.value),
+                                className: "w-full bg-gray-800/80 p-2 rounded-md mb-3 border border-cyan-900/30 text-sm"
+                            },
+                                React.createElement('option', { value: "" }, "Sélectionner une catégorie"),
+                                Object.keys(customMenu).map(key => 
+                                    React.createElement('option', { key: key, value: key }, customMenu[key].label)
+                                )
+                            ),
+                            React.createElement('input', { 
+                                type: "text", 
+                                value: newProductName, 
+                                onChange: (e) => setNewProductName(e.target.value),
+                                className: "w-full bg-gray-800/80 p-2 rounded-md mb-3 border border-cyan-900/30 text-sm",
+                                placeholder: "Nom du produit"
+                            }),
+                            React.createElement('input', { 
+                                type: "number", 
+                                value: newProductPrice, 
+                                onChange: (e) => setNewProductPrice(e.target.value),
+                                className: "w-full bg-gray-800/80 p-2 rounded-md mb-3 border border-cyan-900/30 text-sm",
+                                placeholder: "Prix unitaire (DZD)"
+                            }),
+                            React.createElement('input', { 
+                                type: "number", 
+                                value: newProductStock, 
+                                onChange: (e) => setNewProductStock(e.target.value),
+                                className: "w-full bg-gray-800/80 p-2 rounded-md mb-3 border border-cyan-900/30 text-sm",
+                                placeholder: "Stock initial (optionnel)"
+                            }),
+                            React.createElement('div', { className: "mb-2" },
+                                React.createElement('label', { className: "block text-xs mb-1 text-cyan-300" }, "Image (optionnelle) :"),
+                                React.createElement('div', { className: "flex gap-2 mb-2" },
+                                    React.createElement('input', { type: "file", accept: "image/*", onChange: handleNewProductImageUpload, className: "text-xs flex-1" }),
+                                    React.createElement('input', { type: "text", value: newProductImageImport, onChange: (e) => setNewProductImageImport(e.target.value), placeholder: "ou URL Flaticon", className: "flex-1 bg-gray-800/80 text-xs p-1 rounded-md border border-cyan-900/30" }),
+                                    React.createElement('button', { onClick: handleNewProductImageImport, disabled: newProductUploading, className: "bg-blue-950/60 px-2 py-1 rounded-md text-[10px]" }, "📥")
+                                ),
+                                newProductUploading && React.createElement('p', { className: "text-yellow-400 text-[10px]" }, "Upload..."),
+                                newProductImageUrl && React.createElement('div', { className: "mt-1 flex items-center gap-2" },
+                                    React.createElement('img', { src: newProductImageUrl, className: "w-8 h-8 rounded object-cover" }),
+                                    React.createElement('button', { onClick: () => setNewProductImageUrl(''), className: "text-red-400 text-[10px]" }, "Supprimer")
+                                )
+                            ),
+                            React.createElement('div', { className: "flex gap-2 mt-3" },
+                                React.createElement('button', { onClick: handleAddProduct, className: "flex-1 bg-green-950/60 border border-green-900/30 py-2 rounded-md text-sm font-bold hover:border-green-500/50" }, "✓ Valider"),
+                                React.createElement('button', { onClick: () => setShowAddProduct(false), className: "flex-1 bg-gray-800/60 border border-gray-700/30 py-2 rounded-md text-sm font-bold hover:border-gray-500/50" }, "✗ Annuler")
+                            )
+                        )
+                    );
+                };
+                
+                // Modale Gestion des éléments
+                const ManageItemsModal = () => {
+                    const [expandedCat, setExpandedCat] = useState(null);
+                    if (!showManageItems) return null;
+                    return React.createElement('div', { className: "fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[150] p-4", onClick: () => setShowManageItems(false) },
+                        React.createElement('div', { className: "bg-gray-900/90 rounded-xl border border-cyan-900/50 max-w-md w-full max-h-[80vh] overflow-y-auto p-4", onClick: e => e.stopPropagation() },
+                            React.createElement('div', { className: "flex justify-between items-center mb-3" },
+                                React.createElement('h3', { className: "text-lg font-bold text-cyan-400" }, "🔧 Gestion des éléments"),
+                                React.createElement('button', { onClick: () => setShowManageItems(false), className: "text-gray-400 text-xl hover:text-cyan-400" }, "✕")
+                            ),
+                            React.createElement('div', { className: "space-y-3" },
+                                Object.keys(customMenu).map(catKey => {
+                                    const category = customMenu[catKey];
+                                    const isExpanded = expandedCat === catKey;
+                                    return React.createElement('div', { key: catKey, className: "border border-cyan-900/30 rounded-lg p-2" },
+                                        React.createElement('div', { className: "flex justify-between items-center" },
+                                            React.createElement('button', { 
+                                                onClick: () => setExpandedCat(isExpanded ? null : catKey),
+                                                className: "flex-1 text-left font-bold text-cyan-300 text-sm"
+                                            }, category.label),
+                                            React.createElement('button', { 
+                                                onClick: () => deleteCategory(catKey),
+                                                className: "bg-red-950/60 border border-red-900/30 px-2 py-1 rounded-md text-[10px] hover:border-red-500/50"
+                                            }, "🗑️ Supprimer")
+                                        ),
+                                        isExpanded && React.createElement('div', { className: "mt-2 pl-2 space-y-1 border-l border-cyan-900/30" },
+                                            category.items.map((item, idx) => 
+                                                React.createElement('div', { key: idx, className: "flex justify-between items-center py-1 text-xs" },
+                                                    React.createElement('span', {}, item.n, " (", item.p, " DZD)"),
+                                                    React.createElement('button', { 
+                                                        onClick: () => deleteProduct(catKey, item.n, idx),
+                                                        className: "text-red-400 hover:text-red-300 text-xs"
+                                                    }, "✕")
+                                                )
+                                            ),
+                                            category.items.length === 0 && React.createElement('p', { className: "text-gray-400 text-xs" }, "Aucun produit")
+                                        )
+                                    );
+                                }),
+                                Object.keys(customMenu).length === 0 && React.createElement('p', { className: "text-gray-400 text-sm text-center" }, "Aucune catégorie")
+                            )
+                        )
+                    );
+                };
+                
+                // Modale Édition avancée (menu principal)
+                const AdvancedEditModal = () => {
+                    if (!showAdvancedEdit) return null;
+                    return React.createElement('div', { className: "fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[120] p-4", onClick: () => setShowAdvancedEdit(false) },
+                        React.createElement('div', { className: "bg-gray-900/90 rounded-xl border border-cyan-900/50 max-w-sm w-full p-4", onClick: e => e.stopPropagation() },
+                            React.createElement('div', { className: "flex justify-between items-center mb-3" },
+                                React.createElement('h3', { className: "text-lg font-bold text-cyan-400" }, "🔧 Édition avancée"),
+                                React.createElement('button', { onClick: () => setShowAdvancedEdit(false), className: "text-gray-400 text-xl hover:text-cyan-400" }, "✕")
+                            ),
+                            React.createElement('div', { className: "space-y-3" },
+                                React.createElement('button', { 
+                                    onClick: () => { setShowAdvancedEdit(false); setShowAddCategory(true); },
+                                    className: "w-full bg-purple-950/60 border border-purple-900/30 py-2 rounded-lg text-sm hover:border-purple-500/50 transition-all active:scale-95"
+                                }, "➕ Ajouter une catégorie"),
+                                React.createElement('button', { 
+                                    onClick: () => { setShowAdvancedEdit(false); setShowAddProduct(true); },
+                                    className: "w-full bg-green-950/60 border border-green-900/30 py-2 rounded-lg text-sm hover:border-green-500/50 transition-all active:scale-95"
+                                }, "➕ Ajouter un produit"),
+                                React.createElement('button', { 
+                                    onClick: () => { setShowAdvancedEdit(false); setShowManageItems(true); },
+                                    className: "w-full bg-blue-950/60 border border-blue-900/30 py-2 rounded-lg text-sm hover:border-blue-500/50 transition-all active:scale-95"
+                                }, "🔧 Gestion des éléments")
+                            )
+                        )
+                    );
+                };
+                
+                // Bouton flottant
+                const FloatingAdvancedButton = () => {
+                    if (!isEditingMode) return null;
+                    return React.createElement('button', { 
+                        className: "floating-btn",
+                        onClick: () => setShowAdvancedEdit(true)
+                    }, "🔧 Édition Avancée");
+                };
+                
+                // Navigation principale
                 const MainContent = () => {
                     if (isTablet) {
                         return React.createElement('div', { className: "flex flex-1 overflow-hidden" },
                             React.createElement('div', { className: "flex-1 overflow-y-auto p-2 border-r border-cyan-900/30" }, React.createElement(SellView, null)),
                             React.createElement('div', { className: "w-1/3 overflow-y-auto p-2 border-r border-cyan-900/30" }, React.createElement(RecipesView, null)),
-                            React.createElement('div', { className: "w-1/3 overflow-y-auto p-2" }, React.createElement(SyncView, null))
+                            React.createElement('div', { className: "w-1/3 overflow-y-auto p-2" }, React.createElement(SupplyView, null))
                         );
                     }
                     return React.createElement('div', { className: "flex flex-col h-full overflow-hidden" },
                         React.createElement('div', { className: "flex-1 overflow-y-auto" },
                             activeTab === 'sell' && React.createElement(SellView, null),
                             activeTab === 'recipes' && React.createElement(RecipesView, null),
-                            activeTab === 'sync' && React.createElement(SyncView, null)
+                            activeTab === 'supply' && React.createElement(SupplyView, null)
                         ),
                         React.createElement('div', { className: "flex-shrink-0 bg-gray-900/80 backdrop-blur-sm border-t border-cyan-900/30 flex justify-around items-center py-1 px-2" },
-                            React.createElement('button', { onClick: () => setActiveTab('sell'), className: `flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg ${activeTab === 'sell' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-gray-400 hover:text-cyan-300'}` }, React.createElement('span', { className: "text-xl" }, "🛒"), React.createElement('span', { className: "text-[10px] font-bold" }, "Vendre")),
+                            React.createElement('button', { onClick: () => setActiveTab('sell'), className: `flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg ${activeTab === 'sell' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-gray-400 hover:text-cyan-300'}` }, React.createElement('span', { className: "text-xl" }, "🍽️"), React.createElement('span', { className: "text-[10px] font-bold" }, "Saloon")),
                             React.createElement('button', { onClick: () => setActiveTab('recipes'), className: `flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg ${activeTab === 'recipes' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-gray-400 hover:text-cyan-300'}` }, React.createElement('span', { className: "text-xl" }, "📋"), React.createElement('span', { className: "text-[10px] font-bold" }, "Recette")),
-                            React.createElement('button', { onClick: () => setActiveTab('sync'), className: `flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg ${activeTab === 'sync' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-gray-400 hover:text-cyan-300'}` }, React.createElement('span', { className: "text-xl" }, "🔄"), React.createElement('span', { className: "text-[10px] font-bold" }, "Synchro")),
+                            React.createElement('button', { onClick: () => setActiveTab('supply'), className: `flex flex-col items-center gap-0.5 py-1 px-3 rounded-lg ${activeTab === 'supply' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-gray-400 hover:text-cyan-300'}` }, React.createElement('span', { className: "text-xl" }, "📦"), React.createElement('span', { className: "text-[10px] font-bold" }, "Stock")),
                             React.createElement('button', { 
                                 onClick: handleOptionsClick,
                                 onTouchStart: (e) => { optionsPressTimer.current = setTimeout(() => handleOptionsLongPress(), 500); },
@@ -711,7 +1253,14 @@
                     React.createElement(MainContent, null),
                     React.createElement(OptionsModal, null),
                     React.createElement(EditModalComponent, null),
-                    React.createElement(RecipeDetailModal, null)
+                    React.createElement(RecipeDetailModal, null),
+                    React.createElement(StockNumPad, null),
+                    React.createElement(FloatingAdvancedButton, null),
+                    React.createElement(AdvancedEditModal, null),
+                    React.createElement(AddCategoryModal, null),
+                    React.createElement(AddProductModal, null),
+                    React.createElement(ManageItemsModal, null),
+                    React.createElement(ConfirmModal, null)
                 );
             };
             
