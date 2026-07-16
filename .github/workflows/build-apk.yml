@@ -1,0 +1,53 @@
+name: Build Android APK (Capacitor)
+
+on:
+  push:
+    branches:
+      - main # Se déclenche à chaque push sur la branche principale (change par 'master' si ta branche s'appelle master)
+  workflow_dispatch: # Te permet aussi de lancer la compilation manuellement depuis l'interface GitHub
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Récupérer le code de ton dépôt GitHub
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # 2. Installer Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      # 3. Configurer Java (obligatoire pour compiler du Android)
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # 4. Installer les dépendances (Capacitor) sur le serveur GitHub
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      # 5. Synchroniser ton code du dossier www/ vers le projet Android natif
+      - name: Capacitor Sync
+        run: npx cap sync android
+
+      # 6. Lancer la compilation de l'APK via Gradle
+      - name: Build Android APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # 7. Sauvegarder et proposer l'APK en téléchargement
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: icafe-app-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
